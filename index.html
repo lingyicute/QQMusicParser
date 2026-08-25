@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>QQ Music Playlist Parser by lingyicute</title>
+<meta name="theme-color" id="metaTheme" content="#FDF8FF">
+<style>
+/* ============ Font ============ */
+@font-face{
+  font-family:'Nebulove';
+  src:url('https://raw.githubusercontent.com/lingyicute/Nebulove/main/Nebulove.ttf') format('truetype');
+  font-display:swap;
+}
+
+/* ============ Material You Tokens ============ */
+:root{
+  --ease-std: cubic-bezier(.2,0,0,1);
+  --ease-emph: cubic-bezier(.05,.7,.1,1);
+  --ease-spring: cubic-bezier(.34,1.35,.44,1);
+  --r-lg:24px; --r-xl:28px;
+}
+html[data-theme="light"]{
+  color-scheme:light;
+  --primary:#6750A4; --on-primary:#FFFFFF;
+  --primary-container:#EADDFF; --on-primary-container:#21005D;
+  --secondary-container:#E8DEF8; --on-secondary-container:#1D192B;
+  --tertiary:#9A4522; --tertiary-container:#FFDBCE; --on-tertiary-container:#380D00;
+  --surface:#FDF8FF; --on-surface:#1D1B20;
+  --surface-variant:#E7E0EC; --on-surface-variant:#49454F;
+  --surface-container-lowest:#FFFFFF; --surface-container-low:#F7F2FA;
+  --surface-container:#F3EDF7; --surface-container-high:#ECE6F0; --surface-container-highest:#E6E0E9;
+  --outline:#79747E; --outline-variant:#CAC4D0;
+  --error:#B3261E; --error-container:#F9DEDC; --on-error-container:#410E0B;
+  --scrim:rgba(20,15,30,.45);
+  --inverse-surface:#322F35; --inverse-on-surface:#F5EFF7;
+  --shadow-1:0 1px 2px rgba(29,27,32,.14),0 1px 3px 1px rgba(29,27,32,.08);
+  --shadow-2:0 2px 6px 2px rgba(29,27,32,.13),0 1px 2px rgba(29,27,32,.16);
+  --shadow-3:0 8px 24px 4px rgba(29,27,32,.14),0 2px 6px rgba(29,27,32,.18);
+  --blob-op:.55;
+}
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --primary:#D0BCFF; --on-primary:#381E72;
+  --primary-container:#4F378B; --on-primary-container:#EADDFF;
+  --secondary-container:#4A4458; --on-secondary-container:#E8DEF8;
+  --tertiary:#FFB59C; --tertiary-container:#5D1900; --on-tertiary-container:#FFDBCE;
+  --surface:#141218; --on-surface:#E6E0E9;
+  --surface-variant:#49454F; --on-surface-variant:#CAC4D0;
+  --surface-container-lowest:#0F0D13; --surface-container-low:#1D1B20;
+  --surface-container:#211F26; --surface-container-high:#2B2930; --surface-container-highest:#36343B;
+  --outline:#938F99; --outline-variant:#49454F;
+  --error:#F2B8B5; --error-container:#8C1D18; --on-error-container:#F9DEDC;
+  --scrim:rgba(0,0,0,.6);
+  --inverse-surface:#E6E0E9; --inverse-on-surface:#322F35;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4),0 1px 3px 1px rgba(0,0,0,.3);
+  --shadow-2:0 2px 6px 2px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.45);
+  --shadow-3:0 8px 24px 4px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.5);
+  --blob-op:.38;
+}
+
+/* ============ Base ============ */
+html{ scroll-behavior:smooth; }
+body{
+  margin:0;
+  font-family:'Nebulove','PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
+  background:var(--surface); color:var(--on-surface);
+  min-height:100dvh; overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+  transition:background-color .5s var(--ease-std), color .5s var(--ease-std);
+}
+::selection{ background:var(--primary-container); color:var(--on-primary-container); }
+:focus-visible{ outline:3px solid var(--primary); outline-offset:3px; border-radius:8px; }
+button{ font-family:inherit; border:0; background:none; color:inherit; cursor:pointer; padding:0; }
+input{ font-family:inherit; }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-thumb{ background:var(--outline-variant); border-radius:99px; border:3px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover{ background:var(--outline); background-clip:content-box; border:3px solid transparent; }
+
+/* ============ Background Blobs ============ */
+.blobs{ position:fixed; inset:0; z-index:-1; overflow:hidden; pointer-events:none; }
+.blob{ position:absolute; border-radius:50%; filter:blur(90px); opacity:var(--blob-op); transition:background 1s; }
+.blob-1{ width:46vmax; height:46vmax; left:-14vmax; top:-16vmax; background:radial-gradient(circle at 40% 40%, var(--primary-container), transparent 68%); animation:drift1 34s ease-in-out infinite alternate; }
+.blob-2{ width:40vmax; height:40vmax; right:-12vmax; top:8vmax; background:radial-gradient(circle at 60% 40%, var(--tertiary-container), transparent 66%); animation:drift2 40s ease-in-out infinite alternate; }
+.blob-3{ width:38vmax; height:38vmax; left:22vmax; bottom:-20vmax; background:radial-gradient(circle at 50% 50%, var(--secondary-container), transparent 66%); animation:drift1 46s ease-in-out infinite alternate-reverse; }
+@keyframes drift1{ to{ transform:translate(6vmax,4vmax) scale(1.12); } }
+@keyframes drift2{ to{ transform:translate(-5vmax,6vmax) scale(.92); } }
+
+/* ============ Header ============ */
+.topbar{
+  position:fixed; top:0; left:0; right:0; z-index:40;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px clamp(16px,4vw,36px);
+  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+  background:color-mix(in srgb, var(--surface) 72%, transparent);
+}
+.brand{ display:flex; align-items:center; gap:12px; }
+.brand-mark{
+  width:42px; height:42px; border-radius:14px;
+  background:var(--primary-container); color:var(--on-primary-container);
+  display:grid; place-items:center; box-shadow:var(--shadow-1);
+  transition:transform .5s var(--ease-spring), border-radius .4s var(--ease-std);
+}
+.brand:hover .brand-mark{ transform:rotate(-8deg) scale(1.05); border-radius:50%; }
+.brand-mark svg{ width:22px; height:22px; }
+.brand-name{ font-size:15px; letter-spacing:.02em; color:var(--on-surface); }
+.brand-name b{ font-weight:700; }
+.brand-sub{ font-size:11.5px; color:var(--on-surface-variant); letter-spacing:.06em; }
+.icon-btn{
+  width:46px; height:46px; border-radius:50%;
+  display:grid; place-items:center; color:var(--on-surface-variant);
+  position:relative; overflow:hidden;
+  transition:background .3s, color .3s, transform .3s var(--ease-spring);
+}
+.icon-btn:hover{ background:color-mix(in srgb, var(--on-surface) 8%, transparent); color:var(--on-surface); }
+.icon-btn:active{ transform:scale(.9); }
+.icon-btn svg{ width:22px; height:22px; }
+
+/* ============ Ripple ============ */
+.ripple{ position:relative; overflow:hidden; }
+.ripple-ink{
+  position:absolute; border-radius:50%; pointer-events:none;
+  background:currentColor; opacity:.14; transform:scale(0);
+  animation:rip .55s var(--ease-std) forwards;
+}
+@keyframes rip{ to{ transform:scale(1); opacity:0; } }
+
+/* ============ Hero ============ */
+.hero{
+  min-height:92dvh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:100px clamp(16px,5vw,40px) 48px;
+  gap:0; transition:min-height .8s var(--ease-emph), padding .8s var(--ease-emph);
+}
+.hero.compact{ min-height:0; padding-top:104px; padding-bottom:8px; }
+.hero-kicker{
+  display:inline-flex; align-items:center; gap:8px;
+  background:var(--secondary-container); color:var(--on-secondary-container);
+  font-size:12.5px; letter-spacing:.14em; padding:8px 18px; border-radius:99px;
+  max-height:60px; opacity:1; overflow:hidden;
+  transition:opacity .5s, max-height .6s var(--ease-emph), padding .6s, margin .6s;
+  margin-bottom:22px;
+}
+.hero.compact .hero-kicker{ opacity:0; max-height:0; padding:0 18px; margin-bottom:0; }
+.hero-title{
+  margin:0; font-weight:800; line-height:1.06; letter-spacing:-.015em;
+  font-size:clamp(2.5rem,7.5vw,4.6rem);
+  transition:font-size .8s var(--ease-emph);
+}
+.hero.compact .hero-title{ font-size:clamp(1.35rem,3vw,1.9rem); }
+.hero-title .grad{
+  background:linear-gradient(100deg, var(--primary), var(--tertiary) 90%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.byline{
+  margin-top:18px; display:inline-flex; align-items:center; gap:8px;
+  background:var(--tertiary-container); color:var(--on-tertiary-container);
+  padding:9px 20px; border-radius:99px; font-size:14.5px; letter-spacing:.04em;
+  box-shadow:var(--shadow-1); text-decoration:none;
+  max-height:60px; opacity:1; overflow:hidden;
+  transition:opacity .5s, max-height .6s var(--ease-emph), padding .6s, margin .6s, transform .35s var(--ease-spring), box-shadow .3s;
+}
+.byline:hover{ transform:translateY(-3px); box-shadow:var(--shadow-2); }
+.byline:active{ transform:scale(.95); }
+.byline svg{ width:16px; height:16px; transition:transform .35s var(--ease-spring); }
+.byline:hover svg{ transform:scale(1.25); }
+.hero.compact .byline{ opacity:0; max-height:0; padding:0 20px; margin-top:0; }
+.hero-hint{
+  margin-top:14px; color:var(--on-surface-variant); font-size:14px; letter-spacing:.03em;
+  max-width:480px; line-height:1.7;
+  max-height:80px; opacity:1; overflow:hidden;
+  transition:opacity .5s, max-height .6s var(--ease-emph), margin .6s;
+}
+.hero.compact .hero-hint{ opacity:0; max-height:0; margin-top:0; }
+
+/* ============ Search Bar ============ */
+.searchbar{
+  margin-top:32px; width:min(620px,100%);
+  display:flex; align-items:center; gap:8px;
+  background:var(--surface-container-high);
+  border-radius:99px; padding:8px 8px 8px 24px;
+  box-shadow:var(--shadow-2);
+  transition:box-shadow .35s, background .35s, transform .35s var(--ease-spring), margin-top .8s var(--ease-emph);
+  border:1.5px solid transparent;
+}
+.searchbar:focus-within{
+  background:var(--surface-container-lowest);
+  border-color:color-mix(in srgb, var(--primary) 55%, transparent);
+  box-shadow:var(--shadow-3); transform:translateY(-2px);
+}
+.hero.compact .searchbar{ margin-top:20px; }
+.searchbar.error{ border-color:var(--error); animation:shake .45s var(--ease-std); }
+@keyframes shake{ 20%{transform:translateX(-8px)} 40%{transform:translateX(7px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(3px)} }
+.search-ic{ color:var(--on-surface-variant); display:grid; place-items:center; flex:none; }
+.search-ic svg{ width:22px; height:22px; }
+#plInput{
+  flex:1; min-width:0; background:none; border:0; outline:0; color:var(--on-surface);
+  font-size:17px; letter-spacing:.05em; height:48px;
+}
+#plInput::placeholder{ color:var(--on-surface-variant); opacity:.75; }
+.go-fab{
+  flex:none; width:52px; height:52px; border-radius:50%;
+  background:var(--primary); color:var(--on-primary);
+  display:grid; place-items:center; box-shadow:var(--shadow-2);
+  transition:transform .35s var(--ease-spring), box-shadow .3s, border-radius .3s;
+  position:relative; overflow:hidden;
+}
+.go-fab:hover{ transform:scale(1.08) rotate(-6deg); box-shadow:var(--shadow-3); border-radius:18px; }
+.go-fab:active{ transform:scale(.94); }
+.go-fab svg{ width:24px; height:24px; }
+.samples{
+  margin-top:20px; display:flex; gap:10px; flex-wrap:wrap; justify-content:center;
+  max-height:60px; opacity:1; overflow:hidden;
+  transition:opacity .5s, max-height .6s var(--ease-emph), margin .6s;
+}
+.hero.compact .samples{ opacity:0; max-height:0; margin-top:0; }
+.chip{
+  display:inline-flex; align-items:center; gap:7px;
+  background:var(--surface-container); color:var(--on-surface-variant);
+  border:1px solid var(--outline-variant);
+  padding:9px 16px; border-radius:99px; font-size:13px; letter-spacing:.03em;
+  transition:background .3s, color .3s, transform .3s var(--ease-spring), border-color .3s;
+  position:relative; overflow:hidden;
+}
+.chip:hover{ background:var(--secondary-container); color:var(--on-secondary-container); border-color:transparent; transform:translateY(-2px); }
+.chip svg{ width:15px; height:15px; }
+
+/* ============ Progress ============ */
+.linear-prog{
+  width:min(620px,100%); height:6px; border-radius:99px; margin-top:26px;
+  background:var(--surface-container-highest); overflow:hidden;
+  opacity:0; pointer-events:none; transition:opacity .3s;
+}
+.linear-prog.on{ opacity:1; }
+.linear-prog>span{
+  display:block; height:100%; width:38%; border-radius:99px;
+  background:linear-gradient(90deg, var(--primary), var(--tertiary));
+  animation:indet 1.15s var(--ease-std) infinite;
+}
+@keyframes indet{ 0%{margin-left:-38%} 100%{margin-left:100%} }
+
+/* ============ Playlist Section ============ */
+.main{ padding:0 clamp(14px,4vw,48px) 120px; }
+.section-head{
+  width:min(1500px,100%); margin:36px auto 22px;
+  display:none; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+}
+.section-head.show{ display:flex; animation:cardIn .7s var(--ease-emph) both; }
+.sec-title{ display:flex; align-items:center; gap:14px; }
+.sec-title .ic{
+  width:44px; height:44px; border-radius:14px; flex:none;
+  background:var(--primary-container); color:var(--on-primary-container);
+  display:grid; place-items:center;
+}
+.sec-title .ic svg{ width:22px; height:22px; }
+.sec-title h2{ margin:0; font-size:19px; letter-spacing:.02em; }
+.sec-title p{ margin:3px 0 0; font-size:12.5px; color:var(--on-surface-variant); letter-spacing:.05em; }
+.filter{
+  display:flex; align-items:center; gap:10px;
+  background:var(--surface-container-high); border-radius:99px;
+  padding:0 18px; height:46px; border:1.5px solid transparent;
+  transition:border-color .3s, background .3s;
+}
+.filter:focus-within{ background:var(--surface-container-lowest); border-color:color-mix(in srgb, var(--primary) 55%, transparent); }
+.filter svg{ width:18px; height:18px; color:var(--on-surface-variant); flex:none; }
+.filter input{ border:0; outline:0; background:none; color:var(--on-surface); font-size:14px; width:150px; letter-spacing:.03em; }
+.filter input::placeholder{ color:var(--on-surface-variant); opacity:.7; }
+
+/* ============ Grid & Cards ============ */
+.grid{
+  width:min(1500px,100%); margin:0 auto;
+  display:grid; gap:18px;
+  grid-template-columns:1fr;
+}
+@media(min-width:560px){ .grid{ grid-template-columns:repeat(2,1fr); } }
+@media(min-width:820px){ .grid{ grid-template-columns:repeat(3,1fr); } }
+@media(min-width:1080px){ .grid{ grid-template-columns:repeat(4,1fr); } }
+@media(min-width:1400px){ .grid{ grid-template-columns:repeat(5,1fr); } }
+
+.card{
+  display:flex; align-items:center; gap:14px; text-align:left;
+  background:var(--surface-container); border-radius:22px; padding:12px;
+  transition:transform .4s var(--ease-spring), background .3s, box-shadow .3s;
+  animation:cardIn .6s var(--ease-emph) both;
+  border:1px solid color-mix(in srgb, var(--outline-variant) 45%, transparent);
+}
+.card:hover{ transform:translateY(-4px); background:var(--surface-container-high); box-shadow:var(--shadow-2); }
+.card:active{ transform:scale(.97); }
+@keyframes cardIn{ from{ opacity:0; transform:translateY(22px) scale(.96); } }
+.card .art{
+  width:66px; height:66px; border-radius:16px; flex:none; overflow:hidden; position:relative;
+  background:linear-gradient(135deg, var(--primary-container), var(--tertiary-container));
+  box-shadow:var(--shadow-1);
+}
+.card .art img{ width:100%; height:100%; object-fit:cover; display:block; position:relative; z-index:1; transition:transform .5s var(--ease-std); }
+.card:hover .art img{ transform:scale(1.1); }
+.card .art .ph{
+  position:absolute; inset:0; display:grid; place-items:center;
+  color:var(--on-primary-container); opacity:.6;
+}
+.card .art .ph svg{ width:26px; height:26px; }
+.card .play-hint{
+  position:absolute; inset:0; z-index:2; display:grid; place-items:center;
+  background:color-mix(in srgb, var(--primary) 46%, transparent);
+  color:#fff; opacity:0; transition:opacity .3s;
+}
+.card:hover .play-hint{ opacity:1; }
+.card .play-hint svg{ width:26px; height:26px; }
+.card .meta{ min-width:0; flex:1; }
+.card .t{
+  margin:0; font-size:14.5px; font-weight:600; letter-spacing:.015em;
+  display:flex; align-items:center; gap:7px;
+}
+.card .t .tt{ min-width:0; }
+.card .playing-eq{ display:none; align-items:flex-end; gap:2.5px; height:14px; flex:none; }
+.card.playing .playing-eq{ display:inline-flex; }
+.card .playing-eq i{ width:3px; background:var(--primary); border-radius:2px; animation:eq .9s ease-in-out infinite; }
+.card .playing-eq i:nth-child(1){ height:60%; animation-delay:0s; }
+.card .playing-eq i:nth-child(2){ height:100%; animation-delay:.2s; }
+.card .playing-eq i:nth-child(3){ height:45%; animation-delay:.4s; }
+@keyframes eq{ 50%{ transform:scaleY(.35); } }
+.card .a{
+  margin:5px 0 0; font-size:12.5px; color:var(--on-surface-variant);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:.03em;
+}
+@media(min-width:560px){
+  .card{ flex-direction:column; align-items:stretch; gap:13px; padding:14px; }
+  .card .art{ width:100%; height:auto; aspect-ratio:1/1; border-radius:18px; }
+  .card .meta{ padding:0 4px 4px; }
+  .card .t{ font-size:15px; }
+  .card .a{ font-size:13px; margin-top:6px; }
+}
+
+/* Skeleton */
+.skel{ pointer-events:none; }
+.skel .art, .skel .l1, .skel .l2{
+  background:linear-gradient(100deg, var(--surface-container-high) 30%, var(--surface-container-highest) 50%, var(--surface-container-high) 70%);
+  background-size:220% 100%; animation:shimmer 1.3s linear infinite;
+}
+.skel .l1{ height:14px; border-radius:7px; width:82%; }
+.skel .l2{ height:11px; border-radius:6px; width:52%; margin-top:9px; }
+@keyframes shimmer{ to{ background-position:-220% 0; } }
+
+/* Empty / error */
+.state-msg{
+  width:min(1500px,100%); margin:30px auto 0; text-align:center;
+  display:flex; flex-direction:column; align-items:center; gap:14px;
+  color:var(--on-surface-variant); animation:cardIn .6s var(--ease-emph) both;
+}
+.state-msg .big-ic{
+  width:76px; height:76px; border-radius:26px;
+  background:var(--error-container); color:var(--on-error-container);
+  display:grid; place-items:center;
+}
+.state-msg .big-ic svg{ width:36px; height:36px; }
+.state-msg h3{ margin:0; color:var(--on-surface); font-size:18px; }
+.state-msg p{ margin:0; font-size:13.5px; letter-spacing:.03em; }
+
+/* ============ Dialog / Player ============ */
+.scrim{
+  position:fixed; inset:0; background:var(--scrim); z-index:60;
+  opacity:0; pointer-events:none; transition:opacity .4s var(--ease-std);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+}
+.scrim.open{ opacity:1; pointer-events:auto; }
+.dlg{
+  position:fixed; z-index:61; left:50%; top:50%;
+  width:min(920px, calc(100vw - 32px)); max-height:min(760px, calc(100dvh - 40px));
+  transform:translate(-50%,-50%) scale(.9) translateY(30px); opacity:0; pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 12% 0%, color-mix(in srgb, var(--dpc, var(--primary-container)) 34%, transparent), transparent 60%),
+    var(--surface-container-high);
+  border-radius:var(--r-xl);
+  box-shadow:var(--shadow-3);
+  transition:transform .48s var(--ease-emph), opacity .35s;
+  display:flex; flex-direction:column; overflow:hidden;
+  border:1px solid color-mix(in srgb, var(--outline-variant) 40%, transparent);
+}
+.dlg.open{ transform:translate(-50%,-50%) scale(1) translateY(0); opacity:1; pointer-events:auto; }
+.dlg-inner{ overflow-y:auto; overscroll-behavior:contain; }
+.dlg-top{ display:flex; justify-content:space-between; align-items:center; padding:16px 16px 0 22px; }
+.dlg-tag{
+  font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--dopc, var(--on-primary-container));
+  background:var(--dpc, var(--primary-container));
+  padding:6px 14px; border-radius:99px;
+  transition:background .6s, color .6s;
+}
+.player{
+  display:grid; grid-template-columns:300px 1fr; gap:clamp(20px,4vw,40px);
+  padding:20px clamp(20px,4vw,34px) 30px;
+}
+.cover-col{ display:flex; flex-direction:column; gap:16px; }
+.cover{
+  width:100%; aspect-ratio:1/1; border-radius:26px; overflow:hidden; position:relative;
+  background:linear-gradient(135deg, var(--dpc, var(--primary-container)), var(--tertiary-container));
+  box-shadow:var(--shadow-2);
+  transition:box-shadow .4s, border-radius .5s var(--ease-emph), background .6s;
+}
+.cover:hover{ border-radius:40px; }
+.cover img{ width:100%; height:100%; object-fit:cover; display:block; position:relative; z-index:1; }
+.cover .ph{ position:absolute; inset:0; display:grid; place-items:center; color:var(--dopc, var(--on-primary-container)); opacity:.55; }
+.cover .ph svg{ width:72px; height:72px; }
+.cover.loading::after{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--surface) 45%, transparent) 50%, transparent 70%);
+  background-size:220% 100%; animation:shimmer 1.3s linear infinite;
+}
+.song-title{ margin:0; font-size:clamp(19px,2.6vw,25px); font-weight:800; letter-spacing:.01em; line-height:1.3; word-break:break-all; }
+.song-author{
+  margin-top:10px; display:inline-flex; align-items:center; gap:7px; align-self:flex-start;
+  background:var(--dpc, var(--primary-container)); color:var(--dopc, var(--on-primary-container));
+  padding:8px 16px; border-radius:99px; font-size:13px; letter-spacing:.04em;
+  transition:background .6s, color .6s; max-width:100%;
+}
+.song-author span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.song-author svg{ width:15px; height:15px; flex:none; }
+.mid-note{ font-size:11.5px; color:var(--on-surface-variant); letter-spacing:.06em; word-break:break-all; }
+
+/* transport */
+.transport{ display:flex; align-items:center; justify-content:center; gap:18px; }
+.t-btn{
+  width:50px; height:50px; border-radius:50%; display:grid; place-items:center;
+  color:var(--on-surface-variant); position:relative; overflow:hidden;
+  transition:background .3s, color .3s, transform .3s var(--ease-spring);
+}
+.t-btn:hover{ background:color-mix(in srgb, var(--on-surface) 9%, transparent); color:var(--on-surface); transform:scale(1.08); }
+.t-btn:active{ transform:scale(.9); }
+.t-btn svg{ width:27px; height:27px; }
+.fab{
+  width:72px; height:72px; border-radius:24px; flex:none;
+  background:var(--dp, var(--primary)); color:var(--dop, var(--on-primary));
+  display:grid; place-items:center; box-shadow:var(--shadow-2);
+  transition:transform .35s var(--ease-spring), border-radius .35s var(--ease-emph), background .6s, color .6s, box-shadow .3s;
+  position:relative; overflow:hidden;
+}
+.fab:hover{ transform:scale(1.07); border-radius:20px; box-shadow:var(--shadow-3); }
+.fab:active{ transform:scale(.93); }
+.fab svg{ width:32px; height:32px; }
+.fab .spin{
+  width:30px; height:30px; border-radius:50%;
+  border:3.5px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color:currentColor; animation:rot .8s linear infinite;
+}
+@keyframes rot{ to{ transform:rotate(360deg); } }
+
+/* sliders */
+.slider{ -webkit-appearance:none; appearance:none; background:none; height:26px; cursor:pointer; }
+.slider::-webkit-slider-runnable-track{ height:5px; border-radius:99px; background:linear-gradient(90deg, var(--fill, var(--primary)) var(--val,0%), var(--surface-container-highest) var(--val,0%)); }
+.slider::-webkit-slider-thumb{
+  -webkit-appearance:none; width:18px; height:18px; border-radius:50%; margin-top:-6.5px;
+  background:var(--fill, var(--primary)); box-shadow:var(--shadow-1);
+  transition:transform .2s var(--ease-spring);
+}
+.slider:hover::-webkit-slider-thumb, .slider:active::-webkit-slider-thumb{ transform:scale(1.25); }
+.slider::-moz-range-track{ height:5px; border-radius:99px; background:var(--surface-container-highest); }
+.slider::-moz-range-progress{ height:5px; border-radius:99px; background:var(--fill, var(--primary)); }
+.slider::-moz-range-thumb{ width:18px; height:18px; border:0; border-radius:50%; background:var(--fill, var(--primary)); }
+.seek-row{ display:flex; align-items:center; gap:12px; }
+.seek-row .slider{ flex:1; }
+#seekSlider{ --fill:var(--dp, var(--primary)); }
+#volSlider{ --fill:var(--on-surface-variant); width:96px; }
+.time{ font-size:12px; color:var(--on-surface-variant); font-variant-numeric:tabular-nums; letter-spacing:.04em; flex:none; width:38px; }
+.time:last-child{ text-align:right; }
+.vol-row{ display:flex; align-items:center; justify-content:center; gap:6px; }
+.vol-row .icon-btn{ width:42px; height:42px; }
+.vol-row .icon-btn svg{ width:21px; height:21px; }
+
+/* lyrics */
+.lyrics-col{ display:flex; flex-direction:column; min-height:0; }
+.lyrics-head{
+  display:flex; align-items:center; gap:9px; margin:0 0 12px;
+  font-size:12.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--on-surface-variant);
+}
+.lyrics-head svg{ width:17px; height:17px; }
+.lyrics-head::after{ content:""; flex:1; height:1px; background:var(--outline-variant); }
+.lyrics{
+  flex:1; min-height:160px; position:relative; overflow:hidden; border-radius:20px;
+  background:color-mix(in srgb, var(--surface-container) 65%, transparent);
+  mask-image:linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
+  -webkit-mask-image:linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
+}
+.lyrics-scroll{
+  height:clamp(190px, 45vh, 430px); overflow-y:auto; padding:34% 22px 40%;
+  scrollbar-width:none;
+}
+.lyrics-scroll::-webkit-scrollbar{ display:none; }
+.line{
+  margin:0; padding:8px 14px; border-radius:14px; cursor:pointer;
+  font-size:15.5px; line-height:1.6; letter-spacing:.02em;
+  color:var(--on-surface-variant); transform-origin:left center;
+  transition:color .35s, transform .45s var(--ease-emph), background .3s;
+}
+.line:hover{ background:color-mix(in srgb, var(--on-surface) 6%, transparent); }
+.line.active{
+  color:var(--dp, var(--primary)); font-weight:700; transform:scale(1.06);
+}
+.line.passed{ opacity:.55; }
+.lyr-empty{
+  position:absolute; inset:0; display:flex; flex-direction:column; gap:12px;
+  align-items:center; justify-content:center; color:var(--on-surface-variant); font-size:14px; letter-spacing:.05em;
+}
+.lyr-empty svg{ width:34px; height:34px; opacity:.6; }
+.lyr-skel{ display:flex; flex-direction:column; gap:16px; padding:52% 24px; }
+.lyr-skel i{
+  height:13px; border-radius:7px;
+  background:linear-gradient(100deg, var(--surface-container-high) 30%, var(--surface-container-highest) 50%, var(--surface-container-high) 70%);
+  background-size:220% 100%; animation:shimmer 1.3s linear infinite;
+}
+.lyr-skel i:nth-child(odd){ width:72%; } .lyr-skel i:nth-child(even){ width:48%; }
+
+/* status line inside dialog */
+.dlg-status{
+  display:none; align-items:center; gap:10px; justify-content:center;
+  padding:12px; font-size:13px; color:var(--on-surface-variant); letter-spacing:.04em;
+}
+.dlg-status.show{ display:flex; }
+.dlg-status .dot{ width:8px; height:8px; border-radius:50%; background:var(--dp, var(--primary)); animation:pulse 1s ease-in-out infinite; }
+@keyframes pulse{ 50%{ transform:scale(1.6); opacity:.4; } }
+
+/* mobile bottom sheet */
+@media(max-width:719px){
+  .dlg{
+    left:0; right:0; top:auto; bottom:0; width:100%;
+    max-height:92dvh; border-radius:28px 28px 0 0;
+    transform:translateY(60%) scale(1); opacity:0;
+  }
+  .dlg.open{ transform:translateY(0) scale(1); opacity:1; }
+  .player{ grid-template-columns:1fr; gap:20px; }
+  .cover-col{ max-width:270px; margin:0 auto; width:100%; }
+  .lyrics-scroll{ height:clamp(155px, 24vh, 250px); }
+  .dlg-top{ padding-top:8px; }
+  .grip{ display:block !important; }
+}
+.grip{ display:none; width:100%; padding:6px 0 0; }
+.grip i{ display:block; width:36px; height:5px; border-radius:99px; background:var(--outline-variant); margin:0 auto; }
+
+/* ============ Snackbar ============ */
+.snackbar{
+  position:fixed; left:50%; bottom:28px; z-index:80;
+  transform:translate(-50%, 90px); opacity:0;
+  background:var(--inverse-surface); color:var(--inverse-on-surface);
+  padding:15px 24px; border-radius:16px; font-size:14px; letter-spacing:.03em;
+  box-shadow:var(--shadow-3);
+  transition:transform .5s var(--ease-emph), opacity .4s;
+  max-width:min(90vw,480px); text-align:center; pointer-events:none;
+}
+.snackbar.show{ transform:translate(-50%,0); opacity:1; }
+
+@media (prefers-reduced-motion: reduce){
+  .blob, .card, .linear-prog>span, .playing-eq i{ animation:none !important; }
+  *{ transition-duration:.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="blobs" aria-hidden="true">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+</div>
+
+<!-- Top bar -->
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+    </div>
+    <div>
+      <div class="brand-name"><b>QQ Music</b> Playlist Parser</div>
+      <div class="brand-sub">Material You Edition</div>
+    </div>
+  </div>
+  <button class="icon-btn ripple" id="themeBtn" aria-label="切换主题" title="切换浅色 / 深色">
+    <svg id="icSun" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></svg>
+    <svg id="icMoon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
+  </button>
+</header>
+
+<!-- Hero -->
+<section class="hero" id="hero">
+  <span class="hero-kicker">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+    TENCENT MUSIC API
+  </span>
+  <h1 class="hero-title">QQ Music<br><span class="grad">Playlist Parser</span></h1>
+  <a class="byline" href="https://github.com/lingyicute" target="_blank" rel="noopener noreferrer" title="在 GitHub 上访问 lingyicute">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+    by lingyicute
+  </a>
+  <p class="hero-hint">输入 QQ 音乐歌单的纯数字 ID，一键解析全部曲目、专辑封面与歌词，点击卡片即可在线试听。</p>
+
+  <form class="searchbar" id="plForm" autocomplete="off">
+    <span class="search-ic">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+    </span>
+    <input id="plInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="15" placeholder="输入歌单 ID（纯数字）" aria-label="歌单 ID">
+    <button class="go-fab ripple" type="submit" aria-label="解析歌单">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/></svg>
+    </button>
+  </form>
+
+  <div class="samples">
+    <button class="chip ripple" type="button" data-fill="7742101424">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+      示例歌单 · 7742101424
+    </button>
+  </div>
+
+  <div class="linear-prog" id="linearProg"><span></span></div>
+</section>
+
+<!-- Playlist -->
+<main class="main">
+  <div class="section-head" id="secHead">
+    <div class="sec-title">
+      <span class="ic">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+      </span>
+      <div>
+        <h2 id="secTitle">解析结果</h2>
+        <p id="secSub"></p>
+      </div>
+    </div>
+    <label class="filter" aria-label="筛选歌曲">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+      <input id="filterInput" placeholder="在歌单内筛选">
+    </label>
+  </div>
+  <div class="grid" id="grid" aria-live="polite"></div>
+  <div class="state-msg" id="stateMsg" style="display:none"></div>
+</main>
+
+<!-- Player Dialog -->
+<div class="scrim" id="scrim"></div>
+<section class="dlg" id="dlg" role="dialog" aria-modal="true" aria-label="歌曲播放器">
+  <div class="grip"><i></i></div>
+  <div class="dlg-inner">
+    <div class="dlg-top">
+      <span class="dlg-tag" id="dlgTag">Now Playing</span>
+      <button class="icon-btn ripple" id="closeBtn" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <div class="player">
+      <div class="cover-col">
+        <div class="cover" id="coverBox">
+          <div class="ph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg></div>
+          <img id="coverImg" alt="专辑封面" draggable="false">
+        </div>
+        <div class="dlg-status" id="dlgStatus"><span class="dot"></span><span id="dlgStatusText">正在解析播放地址…</span></div>
+        <h3 class="song-title" id="songTitle">—</h3>
+        <span class="song-author">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+          <span id="songAuthor">—</span>
+        </span>
+        <span class="mid-note" id="midNote"></span>
+      </div>
+      <div class="lyrics-col">
+        <div class="seek-row">
+          <span class="time" id="curTime">0:00</span>
+          <input class="slider" id="seekSlider" type="range" min="0" max="1000" value="0" aria-label="播放进度">
+          <span class="time" id="durTime">0:00</span>
+        </div>
+        <div class="transport">
+          <button class="t-btn ripple" id="prevBtn" aria-label="上一首">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          <button class="fab ripple" id="playBtn" aria-label="播放 / 暂停">
+            <svg id="icPlay" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="icPause" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            <span class="spin" id="spin"></span>
+          </button>
+          <button class="t-btn ripple" id="nextBtn" aria-label="下一首">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+        </div>
+        <div class="vol-row">
+          <button class="icon-btn ripple" id="volBtn" aria-label="静音">
+            <svg id="icVol" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            <svg id="icMute" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+          </button>
+          <input class="slider" id="volSlider" type="range" min="0" max="100" value="80" aria-label="音量">
+        </div>
+        <p class="lyrics-head">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18v2H3V5zm0 6h12v2H3v-2zm0 6h18v2H3v-2z"/></svg>
+          Lyrics
+        </p>
+        <div class="lyrics">
+          <div class="lyrics-scroll" id="lyricsScroll"></div>
+          <div class="lyr-empty" id="lyrEmpty" style="display:none">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+            <span id="lyrEmptyText">暂无歌词</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="snackbar" id="snackbar"></div>
+
+<script>
+"use strict";
+/* ================= Utils ================= */
+const $ = s => document.querySelector(s);
+const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
+const fmtTime = s => { if(!isFinite(s)||s<0) s=0; const m=Math.floor(s/60), ss=Math.floor(s%60); return m+":"+String(ss).padStart(2,"0"); };
+const api = (server,type,id) => `https://vercel-meting-api.musifei.org/api?server=${server}&type=${type}&id=${encodeURIComponent(id)}`;
+
+/* ================= Theme ================= */
+const rootEl = document.documentElement;
+const themeBtn = $("#themeBtn"), icSun = $("#icSun"), icMoon = $("#icMoon"), metaTheme = $("#metaTheme");
+let seedHSL = null; // dynamic accent seed from cover
+
+function currentTheme(){ return rootEl.getAttribute("data-theme"); }
+function applyTheme(t){
+  rootEl.setAttribute("data-theme", t);
+  icSun.style.display  = t==="dark" ? "block" : "none";
+  icMoon.style.display = t==="dark" ? "none"  : "block";
+  metaTheme.content = t==="dark" ? "#141218" : "#FDF8FF";
+  if(seedHSL) applyDynamicPalette(seedHSL.h, seedHSL.s);
+}
+(function initTheme(){
+  const saved = localStorage.getItem("qmp-theme");
+  const t = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  applyTheme(t);
+})();
+themeBtn.addEventListener("click", ()=>{
+  const next = currentTheme()==="dark" ? "light" : "dark";
+  localStorage.setItem("qmp-theme", next);
+  applyTheme(next);
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", e=>{
+  if(!localStorage.getItem("qmp-theme")) applyTheme(e.matches ? "dark" : "light");
+});
+
+/* ================= Ripple ================= */
+document.addEventListener("pointerdown", e=>{
+  const el = e.target.closest(".ripple");
+  if(!el) return;
+  const r = el.getBoundingClientRect();
+  const d = Math.max(r.width, r.height) * 2.2;
+  const ink = document.createElement("span");
+  ink.className = "ripple-ink";
+  ink.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX-r.left-d/2}px;top:${e.clientY-r.top-d/2}px`;
+  el.appendChild(ink);
+  setTimeout(()=>ink.remove(), 600);
+});
+
+/* ================= Snackbar ================= */
+const snackEl = $("#snackbar");
+let snackTimer = 0;
+function snack(msg, ms=3200){
+  snackEl.textContent = msg;
+  snackEl.classList.add("show");
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(()=>snackEl.classList.remove("show"), ms);
+}
+
+/* ================= QQMusicResolver ================= */
+const QQMusicResolver = {
+  jsonp(url) {
+    return new Promise((resolve, reject) => {
+      const callbackName = 'jsonp_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+      const script = document.createElement('script');
+      const fullUrl = url + (url.includes('?') ? '&' : '?') + 'callback=' + callbackName;
+      script.src = fullUrl;
+      window[callbackName] = (data) => { resolve(data); cleanup(); };
+      script.onerror = () => { reject(new Error('JSONP 请求失败')); cleanup(); };
+      const timeoutId = setTimeout(() => { reject(new Error('JSONP 请求超时')); cleanup(); }, 5000);
+      function cleanup() {
+        clearTimeout(timeoutId);
+        if (script.parentNode) document.head.removeChild(script);
+        delete window[callbackName];
+      }
+      document.head.appendChild(script);
+    });
+  },
+  async getRealUrl(songmid) {
+    const guid = (10000000 * Math.random()).toFixed(0);
+    const dataObj = {
+      req_0: { module: "vkey.GetVkeyServer", method: "CgiGetVkey",
+        param: { guid, songmid: [songmid], songtype: [0], uin: "", loginflag: 1, platform: "20" } },
+      comm: { uin: "", format: "json", ct: 19, cv: 0, authst: "" }
+    };
+    const params = new URLSearchParams({
+      "-": "getplaysongvkey", "g_tk": 5381, "loginUin": "", "hostUin": 0,
+      "format": "jsonp", "inCharset": "utf8", "outCharset": "utf-8",
+      "platform": "yqq.json", "needNewCode": 0, "data": JSON.stringify(dataObj)
+    });
+    const reqUrl = 'https://u.y.qq.com/cgi-bin/musicu.fcg?' + params.toString();
+    try {
+      const res = await this.jsonp(reqUrl);
+      if (res && res.req_0 && res.req_0.data && res.req_0.data.midurlinfo) {
+        const purl = res.req_0.data.midurlinfo[0].purl;
+        if (!purl) return "";
+        const sipArray = res.req_0.data.sip;
+        const sip = sipArray.find(t => !t.startsWith("http://ws")) || sipArray[0];
+        return `${sip}${purl}`.replace("http://", "https://");
+      }
+      return "";
+    } catch (err) { console.error("解析 QQ 音乐链接失败:", err); return ""; }
+  }
+};
+
+/* ================= Dynamic Color (Material You) ================= */
+function rgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h=0, s=0; const l=(max+min)/2;
+  if(max!==min){
+    const d=max-min;
+    s = l>.5 ? d/(2-max-min) : d/(max+min);
+    switch(max){
+      case r: h=(g-b)/d+(g<b?6:0); break;
+      case g: h=(b-r)/d+2; break;
+      default: h=(r-g)/d+4;
+    }
+    h*=60;
+  }
+  return {h, s:s*100, l:l*100};
+}
+function extractSeedColor(url){
+  return new Promise(resolve=>{
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    let done=false;
+    const finish = v=>{ if(!done){ done=true; resolve(v); } };
+    const to = setTimeout(()=>finish(null), 3500);
+    img.onload = ()=>{
+      try{
+        const S=32, cv=document.createElement("canvas");
+        cv.width=S; cv.height=S;
+        const cx=cv.getContext("2d", {willReadFrequently:true});
+        cx.drawImage(img,0,0,S,S);
+        const {data}=cx.getImageData(0,0,S,S);
+        let br=0,bg=0,bb=0,bw=0, fr=0,fg=0,fb=0,fc=0;
+        for(let i=0;i<data.length;i+=4){
+          const a=data[i+3]; if(a<140) continue;
+          const r=data[i],g=data[i+1],b=data[i+2];
+          fr+=r; fg+=g; fb+=b; fc++;
+          const {h,s,l}=rgbToHsl(r,g,b);
+          if(s<18 || l<12 || l>92) continue;
+          const w=(s/100)*(1-Math.abs(l-55)/100);
+          if(w>bw){ bw=w; br=r; bg=g; bb=b; }
+        }
+        clearTimeout(to);
+        if(bw>0) finish(rgbToHsl(br,bg,bb));
+        else if(fc>0) finish(rgbToHsl(Math.round(fr/fc),Math.round(fg/fc),Math.round(fb/fc)));
+        else finish(null);
+      }catch(_){ clearTimeout(to); finish(null); }
+    };
+    img.onerror = ()=>{ clearTimeout(to); finish(null); };
+    img.src = url.replace("R300x300","R150x150");
+  });
+}
+const dlg = $("#dlg");
+function applyDynamicPalette(h, s){
+  const dark = currentTheme()==="dark";
+  const sP = clamp(s*1.15, 40, 82);
+  const sC = clamp(s*.7, 22, 60);
+  let p, onP, pc, onPc;
+  if(dark){
+    p   = `hsl(${h} ${sP}% 79%)`;
+    onP = `hsl(${h} ${clamp(sP,50,90)}% 22%)`;
+    pc  = `hsl(${h} ${clamp(sC,28,55)}% 32%)`;
+    onPc= `hsl(${h} ${clamp(sC,30,70)}% 91%)`;
+  }else{
+    p   = `hsl(${h} ${sP}% 42%)`;
+    onP = "#ffffff";
+    pc  = `hsl(${h} ${sC}% 91%)`;
+    onPc= `hsl(${h} ${clamp(sC+14,30,75)}% 15%)`;
+  }
+  dlg.style.setProperty("--dp", p);
+  dlg.style.setProperty("--dop", onP);
+  dlg.style.setProperty("--dpc", pc);
+  dlg.style.setProperty("--dopc", onPc);
+}
+function clearDynamicPalette(){
+  seedHSL=null;
+  ["--dp","--dop","--dpc","--dopc"].forEach(k=>dlg.style.removeProperty(k));
+}
+
+/* ================= Audio Player ================= */
+const audio = new Audio();
+audio.preload = "metadata";
+audio.volume = .8;
+
+const playBtn=$("#playBtn"), icPlay=$("#icPlay"), icPause=$("#icPause"), spin=$("#spin");
+const seekSlider=$("#seekSlider"), curTime=$("#curTime"), durTime=$("#durTime");
+const volSlider=$("#volSlider"), volBtn=$("#volBtn"), icVol=$("#icVol"), icMute=$("#icMute");
+const dlgStatus=$("#dlgStatus"), dlgStatusText=$("#dlgStatusText");
+let seeking=false;
+
+function setPlayUI(mode){ // 'loading' | 'play' | 'pause'
+  spin.style.display   = mode==="loading" ? "block" : "none";
+  icPlay.style.display = mode==="play"    ? "block" : "none";
+  icPause.style.display= mode==="pause"   ? "block" : "none";
+}
+setPlayUI("play");
+
+playBtn.addEventListener("click", ()=>{
+  if(!audio.src) return;
+  if(audio.paused) audio.play().catch(()=>snack("播放失败，可能受版权保护"));
+  else audio.pause();
+});
+audio.addEventListener("play",  ()=>{ setPlayUI("pause"); markPlayingCard(true); });
+audio.addEventListener("pause", ()=>{ setPlayUI("play");  markPlayingCard(false); });
+audio.addEventListener("loadedmetadata", ()=>{ durTime.textContent = fmtTime(audio.duration); });
+audio.addEventListener("timeupdate", ()=>{
+  if(!seeking && isFinite(audio.duration) && audio.duration>0){
+    seekSlider.value = Math.round(audio.currentTime / audio.duration * 1000);
+    seekSlider.style.setProperty("--val", (seekSlider.value/10)+"%");
+  }
+  curTime.textContent = fmtTime(audio.currentTime);
+  syncLyrics(audio.currentTime);
+});
+audio.addEventListener("ended", ()=>{ if(state.songs.length>1) playAt((state.currentIndex+1)%state.songs.length); });
+audio.addEventListener("error", ()=>{
+  if(!audio.src) return;
+  setPlayUI("play");
+  snack("音频加载失败，该歌曲可能受版权保护");
+});
+seekSlider.addEventListener("input", ()=>{
+  seeking=true;
+  seekSlider.style.setProperty("--val", (seekSlider.value/10)+"%");
+  if(isFinite(audio.duration)) curTime.textContent = fmtTime(seekSlider.value/1000*audio.duration);
+});
+seekSlider.addEventListener("change", ()=>{
+  if(isFinite(audio.duration)) audio.currentTime = seekSlider.value/1000*audio.duration;
+  seeking=false;
+});
+volSlider.addEventListener("input", ()=>{
+  volSlider.style.setProperty("--val", volSlider.value+"%");
+  audio.volume = volSlider.value/100;
+  audio.muted = volSlider.value==="0";
+  syncVolIcon();
+});
+volSlider.style.setProperty("--val","80%");
+volBtn.addEventListener("click", ()=>{
+  audio.muted = !audio.muted;
+  if(!audio.muted && audio.volume===0){ audio.volume=.5; volSlider.value=50; volSlider.style.setProperty("--val","50%"); }
+  syncVolIcon();
+});
+function syncVolIcon(){
+  const muted = audio.muted || audio.volume===0;
+  icVol.style.display = muted ? "none":"block";
+  icMute.style.display = muted ? "block":"none";
+}
+
+/* ================= Lyrics ================= */
+const lyricsScroll=$("#lyricsScroll"), lyrEmpty=$("#lyrEmpty"), lyrEmptyText=$("#lyrEmptyText");
+let lyricLines=[], lyricEls=[], curLine=-1;
+
+function parseLRC(text){
+  const out=[]; const re=/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  for(const raw of text.split(/\r?\n/)){
+    if(/^\[(ti|ar|al|by|offset|re|ve|au|length)\s*:/i.test(raw.trim())) continue;
+    let m, times=[]; re.lastIndex=0;
+    while((m=re.exec(raw))) times.push(+m[1]*60 + +m[2] + (m[3]?+("0."+m[3]):0));
+    const txt = raw.replace(/(\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\])/g,"").trim();
+    for(const t of times) if(txt) out.push({t, txt});
+  }
+  out.sort((a,b)=>a.t-b.t);
+  return out;
+}
+function renderLyricsSkeleton(){
+  lyricLines=[]; lyricEls=[]; curLine=-1;
+  lyrEmpty.style.display="none";
+  lyricsScroll.innerHTML='<div class="lyr-skel">'+'<i></i>'.repeat(7)+'</div>';
+}
+function renderLyrics(lines){
+  lyricLines=lines; curLine=-1;
+  lyricsScroll.innerHTML="";
+  if(!lines.length){
+    lyrEmptyText.textContent = "纯音乐 · 请欣赏 / 暂无歌词";
+    lyrEmpty.style.display="flex";
+    lyricEls=[];
+    return;
+  }
+  lyrEmpty.style.display="none";
+  lyricEls = lines.map((l,i)=>{
+    const p=document.createElement("p");
+    p.className="line"; p.textContent=l.txt;
+    p.addEventListener("click", ()=>{
+      if(!audio.src) return;
+      audio.currentTime=l.t+.01;
+      audio.play().catch(()=>{});
+    });
+    lyricsScroll.appendChild(p);
+    return p;
+  });
+}
+function syncLyrics(t){
+  if(!lyricLines.length) return;
+  let i=lyricLines.length-1;
+  while(i>0 && lyricLines[i].t>t) i--;
+  if(lyricLines[i].t>t) i=-1;
+  if(i===curLine) return;
+  lyricEls.forEach((el,k)=>{
+    el.classList.toggle("active", k===i);
+    el.classList.toggle("passed", k<i);
+  });
+  curLine=i;
+  if(i>=0 && lyricEls[i]){
+    const target = lyricEls[i].offsetTop - lyricsScroll.clientHeight*.38;
+    lyricsScroll.scrollTo({top:centerTarget(target), behavior:"smooth"});
+  }
+}
+function centerTarget(v){ return Math.max(0, v); }
+async function loadLyrics(url, token){
+  renderLyricsSkeleton();
+  try{
+    const r = await fetch(url);
+    if(!r.ok) throw 0;
+    let text = await r.text();
+    const t=text.trim();
+    if(t.startsWith("{")){ try{ const j=JSON.parse(t); text=j.lyric||j.lrc||j.data||text; }catch(_){}
+      if(typeof text!=="string") text=String(text);
+    }
+    if(token!==state.token) return;
+    renderLyrics(parseLRC(text));
+  }catch(_){
+    if(token!==state.token) return;
+    renderLyrics([]);
+  }
+}
+
+/* ================= State ================= */
+const state = { songs:[], currentIndex:-1, token:0 };
+
+/* ================= Dialog ================= */
+const scrim=$("#scrim"), coverBox=$("#coverBox"), coverImg=$("#coverImg"),
+      songTitle=$("#songTitle"), songAuthor=$("#songAuthor"), midNote=$("#midNote"), dlgTag=$("#dlgTag");
+let dlgOpen=false;
+
+function openDialog(){
+  dlgOpen=true;
+  scrim.classList.add("open");
+  dlg.classList.add("open");
+  document.body.style.overflow="hidden";
+}
+function closeDialog(){
+  dlgOpen=false;
+  scrim.classList.remove("open");
+  dlg.classList.remove("open");
+  document.body.style.overflow="";
+  audio.pause(); audio.removeAttribute("src"); audio.load();
+  state.token++;
+  markPlayingCard(false); state.currentIndex=-1;
+  clearDynamicPalette();
+  document.title = "QQ Music Playlist Parser by lingyicute";
+}
+$("#closeBtn").addEventListener("click", closeDialog);
+scrim.addEventListener("click", closeDialog);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && dlgOpen) closeDialog(); });
+
+function markPlayingCard(on){
+  document.querySelectorAll(".card[data-i]").forEach(c=>{
+    c.classList.toggle("playing", on && +c.dataset.i===state.currentIndex);
+  });
+}
+
+/* ================= Play flow ================= */
+const coverPh = coverBox.querySelector(".ph");
+function setCover(song, token){
+  coverBox.classList.add("loading");
+  coverImg.style.display="none";
+  coverPh.style.display="grid";
+  if(!song.pic){ coverBox.classList.remove("loading"); return; }
+  const img=new Image();
+  img.onload = ()=>{
+    if(token!==state.token) return;
+    coverImg.src=song.pic; coverImg.style.display="block";
+    coverPh.style.display="none"; coverBox.classList.remove("loading");
+  };
+  img.onerror= ()=>{
+    if(token!==state.token) return;
+    coverImg.style.display="none"; coverPh.style.display="grid"; coverBox.classList.remove("loading");
+  };
+  img.src=song.pic;
+}
+
+async function playAt(index){
+  const song = state.songs[index];
+  if(!song) return;
+  const token = ++state.token;
+  state.currentIndex = index;
+  markPlayingCard(!audio.paused);
+
+  // UI reset (note: the `url` field returned by the API is intentionally ignored)
+  songTitle.textContent = song.title || "未知曲目";
+  songAuthor.textContent = song.author || "未知歌手";
+  midNote.textContent = "MID · "+song.songmid;
+  dlgTag.textContent = "Track "+(index+1)+" / "+state.songs.length;
+  document.title = (song.title||"未知曲目")+" - "+(song.author||"")+" · Playlist Parser";
+  setCover(song, token);
+  seekSlider.value=0; seekSlider.style.setProperty("--val","0%");
+  curTime.textContent="0:00"; durTime.textContent="0:00";
+  setPlayUI("loading");
+  dlgStatus.classList.add("show"); dlgStatusText.textContent="正在解析播放地址…";
+  audio.pause(); audio.removeAttribute("src");
+
+  // Dynamic accent from cover (non-blocking)
+  if(song.pic){
+    extractSeedColor(song.pic).then(hsl=>{
+      if(hsl && token===state.token){ seedHSL=hsl; applyDynamicPalette(hsl.h, hsl.s); }
+    });
+  }
+
+  // Lyrics (from playlist's lrc field, or refreshed by song api below)
+  if(song.lrc) loadLyrics(song.lrc, token); else renderLyrics([]);
+
+  // Per requirement: call the song API (its url field is intentionally ignored)
+  fetch(api("tencent","song",song.songmid)).then(r=>r.json()).then(arr=>{
+    if(token!==state.token) return;
+    const s = Array.isArray(arr)&&arr[0];
+    if(s && s.lrc && s.lrc!==song.lrc){ song.lrc=s.lrc; loadLyrics(s.lrc, token); }
+  }).catch(()=>{});
+
+  // Resolve real playable URL via JSONP resolver
+  const url = await QQMusicResolver.getRealUrl(song.songmid);
+  if(token!==state.token) return;
+  dlgStatus.classList.remove("show");
+  if(!url){
+    setPlayUI("play");
+    snack("该歌曲因版权 / 付费限制暂时无法播放");
+    return;
+  }
+  audio.src=url;
+  audio.play().then(()=>{
+    if(token!==state.token) return;
+    markPlayingCard(true);
+  }).catch(()=>{ if(token===state.token) setPlayUI("play"); });
+}
+$("#prevBtn").addEventListener("click", ()=>{
+  if(!state.songs.length) return;
+  playAt((state.currentIndex-1+state.songs.length)%state.songs.length);
+});
+$("#nextBtn").addEventListener("click", ()=>{
+  if(!state.songs.length) return;
+  playAt((state.currentIndex+1)%state.songs.length);
+});
+
+/* ================= Playlist ================= */
+const grid=$("#grid"), secHead=$("#secHead"), secTitle=$("#secTitle"), secSub=$("#secSub"),
+      hero=$("#hero"), linearProg=$("#linearProg"), stateMsg=$("#stateMsg"),
+      plInput=$("#plInput"), searchbar=$(".searchbar");
+
+function skeletons(n=10){
+  grid.innerHTML="";
+  for(let i=0;i<n;i++){
+    const d=document.createElement("div");
+    d.className="card skel";
+    d.style.animationDelay=(i*30)+"ms";
+    d.innerHTML='<div class="art"></div><div class="meta"><div class="l1"></div><div class="l2"></div></div>';
+    grid.appendChild(d);
+  }
+}
+function showState(icon, title, sub){
+  stateMsg.style.display="flex";
+  stateMsg.innerHTML = `<div class="big-ic">${icon}</div><h3></h3><p></p>`;
+  stateMsg.querySelector("h3").textContent=title;
+  stateMsg.querySelector("p").textContent=sub;
+}
+function hideState(){ stateMsg.style.display="none"; }
+
+function renderSongs(){
+  grid.innerHTML="";
+  state.songs.forEach((s,i)=>{
+    const c=document.createElement("button");
+    c.className="card ripple"; c.type="button"; c.dataset.i=i;
+    c.dataset.key=((s.title||"")+" "+(s.author||"")).toLowerCase();
+    c.style.animationDelay=Math.min(i*32, 640)+"ms";
+    c.setAttribute("aria-label", (s.title||"")+" - "+(s.author||""));
+    c.innerHTML = `
+      <div class="art">
+        <div class="ph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg></div>
+        <img loading="lazy" draggable="false" alt="">
+        <div class="play-hint"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>
+      </div>
+      <div class="meta">
+        <p class="t"><span class="tt" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <span class="playing-eq"><i></i><i></i><i></i></span></p>
+        <p class="a"></p>
+      </div>`;
+    const img=c.querySelector("img");
+    if(s.pic){ img.src=s.pic; img.onerror=()=>img.remove(); } else img.remove();
+    c.querySelector(".tt").textContent = s.title || "未知曲目";
+    c.querySelector(".a").textContent = s.author || "未知歌手";
+    c.addEventListener("click", ()=>{ openDialog(); playAt(i); });
+    grid.appendChild(c);
+  });
+}
+
+let plToken=0;
+async function loadPlaylist(id){
+  const token=++plToken;
+  hideState();
+  grid.innerHTML="";
+  secHead.classList.remove("show");
+  linearProg.classList.add("on");
+  skeletons(window.innerWidth<560 ? 6 : 10);
+  hero.classList.add("compact");
+
+  try{
+    const r = await fetch(api("tencent","playlist",id));
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const data = await r.json();
+    if(token!==plToken) return;
+    if(!Array.isArray(data) || !data.length){
+      grid.innerHTML="";
+      showState(
+        '<svg viewBox="0 0 24 24" fill="currentColor" width="36" height="36"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
+        "未找到该歌单", "请检查歌单 ID 是否正确，或更换一个试试");
+      return;
+    }
+    state.songs = data;
+    renderSongs();
+    secTitle.textContent = "解析成功";
+    secSub.textContent = "Playlist #"+id+" · 共 "+data.length+" 首曲目";
+    secHead.classList.add("show");
+    snack("已解析 "+data.length+" 首曲目");
+  }catch(err){
+    if(token!==plToken) return;
+    grid.innerHTML="";
+    showState(
+      '<svg viewBox="0 0 24 24" fill="currentColor" width="36" height="36"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
+      "解析失败", "网络异常或接口暂不可用，请稍后重试");
+  }finally{
+    if(token===plToken) linearProg.classList.remove("on");
+  }
+}
+
+/* ================= Input handling ================= */
+plInput.addEventListener("input", ()=>{ plInput.value = plInput.value.replace(/\D+/g,""); });
+$("#plForm").addEventListener("submit", e=>{
+  e.preventDefault();
+  const id = plInput.value.trim();
+  if(!/^\d+$/.test(id)){
+    searchbar.classList.remove("error"); void searchbar.offsetWidth;
+    searchbar.classList.add("error");
+    snack("请输入纯数字的歌单 ID");
+    return;
+  }
+  searchbar.classList.remove("error");
+  loadPlaylist(id);
+});
+document.querySelectorAll("[data-fill]").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    plInput.value = btn.dataset.fill;
+    loadPlaylist(btn.dataset.fill);
+  });
+});
+
+/* ================= Filter ================= */
+$("#filterInput").addEventListener("input", e=>{
+  const q = e.target.value.trim().toLowerCase();
+  let shown=0;
+  document.querySelectorAll(".card[data-key]").forEach(c=>{
+    const hit = !q || c.dataset.key.includes(q);
+    c.style.display = hit ? "" : "none";
+    if(hit) shown++;
+  });
+  if(state.songs.length && shown===0){
+    showState(
+      '<svg viewBox="0 0 24 24" fill="currentColor" width="36" height="36"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>',
+      "没有匹配的曲目", "换个关键词试试");
+  }else hideState();
+});
+</script>
+</body>
+</html>
