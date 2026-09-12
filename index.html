@@ -742,6 +742,157 @@ const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
 const fmtTime = s => { if(!isFinite(s)||s<0) s=0; const m=Math.floor(s/60), ss=Math.floor(s%60); return m+":"+String(ss).padStart(2,"0"); };
 const api = (server,type,id) => `https://vercel-meting-api.musifei.org/api?server=${server}&type=${type}&id=${encodeURIComponent(id)}`;
 
+/* ================= 收集库相关 =================
+ * - 页面加载后立即静默拉取 list.txt，存入 musicdbList。
+ * - 在线拿不到播放地址 / 封面 / 歌词时，用收集库兜底。
+ * - 上报前先查 musicdbList，已收集的不上报。
+ */
+const MUSICDB_BASE = "https://musicdb.92li.uk";
+const MUSICDB_ENABLED = true;
+let musicdbList = new Set();        // 已收集集合：每项为【歌名-歌手】
+let musicdbListLoaded = false;      // list.txt 是否成功加载过
+const musicdbInfoCache = new Map(); // stem -> info.json 内容（null 表示无/失败），避免重复请求
+
+/* 与 Worker 侧 sanitizeName 完全一致的清洗函数，保证算出的 stem 与 list.txt / 文件夹名一致 */
+function sanitizeStem(s, maxLen){
+  maxLen = maxLen || 80;
+ * 注意：所有对收集库的请求都走 MUSICDB_BASE（Cloudflare），不走 raw.githubusercontent。
+  let out = String(s || "")
+    .replace(/[\/\\?%*:|"<>]/g, "_")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/\.+$/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if(out.length > maxLen) out = out.slice(0, maxLen).trim();
+  if(!out || /^[._\s]+$/.test(out) || /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(out)) out = "unknown";
+  return out;
+}
+function songStem(song){
+  return sanitizeStem(song.title) + "-" + sanitizeStem(song.author);
+}
+
+/* 页面加载后立即静默拉取 list.txt（失败也不打扰用户：回退与过滤自动降级） */
+async function loadMusicdbList(){
+  if(!MUSICDB_ENABLED) return;
+  try{
+    const r = await fetch(MUSICDB_BASE + "/list.txt", { cache: "no-store" });
+    if(!r.ok) return;
+    const set = new Set();
+    for(const line of (await r.text()).split("\n")){
+      const t = line.trim();
+      if(t) set.add(t);
+    }
+    musicdbList = set;
+    musicdbListLoaded = true;
+    if(console && console.info) console.info("[musicdb] 已收集 " + set.size + " 首");
+  }catch(_){ /* 静默失败 */ }
+}
+loadMusicdbList();
+
+/* 取收集库中某歌的 info.json（含各文件真实文件名），带缓存。
+ * 即使不在 list.txt 中也尝试一次（容忍目录过期 / 当天刚归档），404 则记 null。 */
+async function getCollectionInfo(song){
+  if(!MUSICDB_ENABLED) return null;
+  let stem = "";
+  try{ stem = songStem(song); }catch(_){ return null; }
+  if(musicdbInfoCache.has(stem)) return musicdbInfoCache.get(stem);
+  let info = null;
+  try{
+    const r = await fetch(MUSICDB_BASE + "/" + encodeURIComponent(stem) + "/info.json");
+    if(r.ok){
+      const j = await r.json();
+      if(j && j.files && j.files.audio) info = j;
+    }
+  }catch(_){ /* 无此歌或网络失败 */ }
+  musicdbInfoCache.set(stem, info);
+  return info;
+}
+
+/* 取收集库文件直链，kind: "audio" | "cover" | "lyric"；无则返回 null */
+async function getCollectionFileUrl(song, kind){
+  const info = await getCollectionInfo(song);
+  if(!info || !info.files) return null;
+  const name = kind === "audio" ? info.files.audio : kind === "cover" ? info.files.cover : info.files.lyric;
+  if(!name || typeof name !== "string") return null;
+  return MUSICDB_BASE + "/" + encodeURIComponent(songStem(song)) + "/" + encodeURIComponent(name);
+}
+
+/* 有效封面地址：在线优先，缺失时用收集库 */
+async function resolveCoverUrl(song){
+  if(song.pic) return song.pic;
+  return (await getCollectionFileUrl(song, "cover")) || "";
+}
+
+/* 歌词解析：歌单 lrc → song API 刷新 → 收集库兜底（fire-and-forget，token 做过期保护） */
+async function resolveLyrics(song, token){
+  const alive = () => token === state.token;
+  if(song.lrc) loadLyrics(song.lrc, token); // loadLyrics 内部先渲染骨架
+  else renderLyricsSkeleton();               // 先占位，避免残留上一首歌词
+  // 在线刷新（原有逻辑：song API 的 url 字段忽略，只取 lrc）
+  try{
+    const r = await fetch(api("tencent", "song", song.songmid));
+    const arr = await r.json();
+    if(!alive()) return;
+    const s = Array.isArray(arr) && arr[0];
+    if(s && s.lrc && s.lrc !== song.lrc){ song.lrc = s.lrc; loadLyrics(s.lrc, token); return; }
+  }catch(_){ /* 在线失败则继续走兜底 */ }
+  if(!alive()) return;
+  if(song.lrc) return; // 在线已有（歌单自带或刚刷新到），不再兜底
+  const colUrl = await getCollectionFileUrl(song, "lyric");
+  if(!alive()) return;
+  if(colUrl) loadLyrics(colUrl, token);
+  else renderLyrics([]);
+}
+
+/* ================= Music Collector =================
+ * 逻辑：用户点击歌曲 → 成功拿到歌曲文件 url → 实际时长 > 60 秒 → 上报收集器
+ * 上报内容：歌名(title)、歌手(author)、专辑图 url(pic)、歌曲文件 url(url)、歌词 url(lrc)
+ */
+const COLLECTOR_URL = "https://music-collector.92li.uk/report";
+const COLLECTOR_ENABLED = true;
+const COLLECTOR_MIN_DURATION = 60; // 歌曲长度
+
+/* 后台探测歌曲实际时长，满足条件则上报收集器（不阻塞播放，失败静默丢弃） */
+function reportToCollector(song, fileUrl){
+  if(!COLLECTOR_ENABLED || !COLLECTOR_URL || COLLECTOR_URL.includes("YOUR_ACCOUNT")) return;
+  if(!song || !fileUrl || !/^https?:\/\//i.test(fileUrl)) return;
+  // 前端去重：已在收集库中的不上报（Worker 端也有一次检查）
+  try{ if(MUSICDB_ENABLED && musicdbList.has(songStem(song))) return; }catch(_){}
+  try{
+    const probe = new Audio();
+    probe.preload = "metadata";
+    let done = false;
+    const cleanup = ()=>{ try{ probe.src=""; probe.removeAttribute("src"); probe.load(); }catch(_){} };
+    const timer = setTimeout(()=>{ if(!done){ done=true; cleanup(); } }, 20000);
+    probe.onloadedmetadata = ()=>{
+      if(done) return; done=true; clearTimeout(timer);
+      const dur = probe.duration;
+      cleanup();
+      if(!isFinite(dur) || dur <= COLLECTOR_MIN_DURATION) return; // ≤60 秒不上报
+      // 在上报时刻再读取 song.lrc，保证拿到 song API 刷新后的最新歌词 url
+      const payload = {
+        title:  song.title  || "",
+        author: song.author || "",
+        pic:    song.pic    || "",
+        url:    fileUrl,
+        lrc:    song.lrc    || "",
+        songmid:  song.songmid || "",
+        duration: Math.round(dur)
+      };
+      if(!payload.title || !payload.author || !payload.url) return;
+      fetch(COLLECTOR_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        mode: "cors",
+        keepalive: true
+      }).catch(()=>{ /* 上报失败不打扰用户 */ });
+    };
+    probe.onerror = ()=>{ if(!done){ done=true; clearTimeout(timer); cleanup(); } };
+    probe.src = fileUrl;
+  }catch(_){ /* 忽略所有上报异常 */ }
+}
+
 /* ================= Theme ================= */
 const rootEl = document.documentElement;
 const themeBtn = $("#themeBtn"), icSun = $("#icSun"), icMoon = $("#icMoon"), metaTheme = $("#metaTheme");
@@ -1156,22 +1307,31 @@ function markPlayingCard(on){
 
 /* ================= Play flow ================= */
 const coverPh = coverBox.querySelector(".ph");
-function setCover(song, token){
+async function setCover(song, token){
   coverBox.classList.add("loading");
   coverImg.style.display="none";
   coverPh.style.display="grid";
-  if(!song.pic){ coverBox.classList.remove("loading"); return; }
+  let pic = await resolveCoverUrl(song); // 在线优先，缺失时用收集库
+  if(token!==state.token) return;
+  if(!pic){ coverBox.classList.remove("loading"); return; }
+  let fellBack = false;
   const img=new Image();
   img.onload = ()=>{
     if(token!==state.token) return;
-    coverImg.src=song.pic; coverImg.style.display="block";
+    coverImg.src=pic; coverImg.style.display="block";
     coverPh.style.display="none"; coverBox.classList.remove("loading");
   };
-  img.onerror= ()=>{
+  img.onerror= async ()=>{
     if(token!==state.token) return;
+    // 在线图坏了 → 试收集库（只兜底一次）
+    if(!fellBack && song.pic && pic===song.pic){
+      fellBack = true;
+      const colPic = await getCollectionFileUrl(song, "cover");
+      if(token===state.token && colPic){ pic=colPic; img.src=colPic; return; }
+    }
     coverImg.style.display="none"; coverPh.style.display="grid"; coverBox.classList.remove("loading");
   };
-  img.src=song.pic;
+  img.src=pic;
 }
 
 async function playAt(index){
@@ -1194,32 +1354,40 @@ async function playAt(index){
   dlgStatus.classList.add("show"); dlgStatusText.textContent="正在解析播放地址…";
   audio.pause(); audio.removeAttribute("src");
 
-  // Dynamic accent from cover (non-blocking)
-  if(song.pic){
-    extractSeedColor(song.pic).then(hsl=>{
-      if(hsl && token===state.token){ seedHSL=hsl; applyDynamicPalette(hsl.h, hsl.s); }
-    });
-  }
+  // Dynamic accent from cover (non-blocking, uses effective cover incl. collection fallback)
+  resolveCoverUrl(song).then(pic=>{
+    if(pic && token===state.token){
+      extractSeedColor(pic).then(hsl=>{
+        if(hsl && token===state.token){ seedHSL=hsl; applyDynamicPalette(hsl.h, hsl.s); }
+      });
+    }
+  });
 
-  // Lyrics (from playlist's lrc field, or refreshed by song api below)
-  if(song.lrc) loadLyrics(song.lrc, token); else renderLyrics([]);
+  // Lyrics：在线（歌单 lrc → song API 刷新）优先，都没有则用收集库兜底
+  resolveLyrics(song, token);
 
-  // Per requirement: call the song API (its url field is intentionally ignored)
-  fetch(api("tencent","song",song.songmid)).then(r=>r.json()).then(arr=>{
-    if(token!==state.token) return;
-    const s = Array.isArray(arr)&&arr[0];
-    if(s && s.lrc && s.lrc!==song.lrc){ song.lrc=s.lrc; loadLyrics(s.lrc, token); }
-  }).catch(()=>{});
-
-  // Resolve real playable URL via JSONP resolver
-  const url = await QQMusicResolver.getRealUrl(song.songmid);
+  // Resolve real playable URL via JSONP resolver；在线失败则用收集库兜底
+  let url = await QQMusicResolver.getRealUrl(song.songmid);
   if(token!==state.token) return;
+  let fromCollection = false;
+  if(!url){
+    dlgStatusText.textContent="在线解析失败，正在尝试查询收集库…";
+    url = await getCollectionFileUrl(song, "audio");
+    if(token!==state.token) return;
+    if(url){
+      fromCollection = true;
+      dlgTag.textContent += " · 收集库";
+    }
+  }
   dlgStatus.classList.remove("show");
   if(!url){
     setPlayUI("play");
     snack("该歌曲因版权 / 付费限制暂时无法播放");
     return;
   }
+  // 上报收集器：成功拿到在线 url，后台校验实际时长 >60s 后自动上报（不阻塞播放）；
+  // 收集库播出的本来就已收集，不上报
+  if(!fromCollection) reportToCollector(song, url);
   audio.src=url;
   audio.play().then(()=>{
     if(token!==state.token) return;
