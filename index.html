@@ -756,7 +756,6 @@ const musicdbInfoCache = new Map(); // stem -> info.json 内容（null 表示无
 /* 与 Worker 侧 sanitizeName 完全一致的清洗函数，保证算出的 stem 与 list.txt / 文件夹名一致 */
 function sanitizeStem(s, maxLen){
   maxLen = maxLen || 80;
- * 注意：所有对收集库的请求都走 MUSICDB_BASE（Cloudflare），不走 raw.githubusercontent。
   let out = String(s || "")
     .replace(/[\/\\?%*:|"<>]/g, "_")
     .replace(/[\x00-\x1f\x7f]/g, "")
