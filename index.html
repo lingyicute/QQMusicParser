@@ -1111,6 +1111,18 @@ function replayCurrent(){
   const p = audio.play();
   if(p && p.catch) p.catch(()=>{ if(state.currentIndex>=0) playAt(state.currentIndex); });
 }
+/* 版权受限处理：列表循环模式下自动跳到下一首，并防止整张歌单都无法播放时的死循环 */
+function skipOnCopyright(msg){
+  snack(msg);
+  if(state.mode!=="list" || state.songs.length<=1) return;
+  state.skipCount++;
+  if(state.skipCount >= state.songs.length){
+    state.skipCount = 0;
+    snack("歌单内曲目均无法播放，已停止自动切换");
+    return;
+  }
+  playAt((state.currentIndex+1)%state.songs.length, true);
+}
 audio.addEventListener("ended", ()=>{
   if(state.mode==="one"){ replayCurrent(); return; }
   if(state.mode==="once"){
@@ -1128,7 +1140,7 @@ audio.addEventListener("ended", ()=>{
 audio.addEventListener("error", ()=>{
   if(!audio.src) return;
   setPlayUI("play");
-  snack("音频加载失败，该歌曲可能受版权保护");
+  skipOnCopyright("音频加载失败，该歌曲可能受版权保护");
 });
 seekSlider.addEventListener("input", ()=>{
   seeking=true;
@@ -1236,7 +1248,7 @@ async function loadLyrics(url, token){
 }
 
 /* ================= State ================= */
-const state = { songs:[], currentIndex:-1, token:0, mode:"list" /* list | one | once */ };
+const state = { songs:[], currentIndex:-1, token:0, mode:"list" /* list | one | once */, skipCount:0 };
 
 /* ================= Play Mode Switch ================= */
 /* list = 列表循环；one = 单曲循环；once = 仅播放此曲目一次 */
@@ -1333,9 +1345,10 @@ async function setCover(song, token){
   img.src=pic;
 }
 
-async function playAt(index){
+async function playAt(index, auto=false){
   const song = state.songs[index];
   if(!song) return;
+  if(!auto) state.skipCount = 0; // 手动选择曲目时重置连续跳过计数
   const token = ++state.token;
   state.currentIndex = index;
   markPlayingCard(!audio.paused);
@@ -1381,7 +1394,7 @@ async function playAt(index){
   dlgStatus.classList.remove("show");
   if(!url){
     setPlayUI("play");
-    snack("该歌曲因版权 / 付费限制暂时无法播放");
+    skipOnCopyright("该歌曲因版权 / 付费限制暂时无法播放");
     return;
   }
   // 上报收集器：成功拿到在线 url，后台校验实际时长 >60s 后自动上报（不阻塞播放）；
@@ -1390,6 +1403,7 @@ async function playAt(index){
   audio.src=url;
   audio.play().then(()=>{
     if(token!==state.token) return;
+    state.skipCount = 0;
     markPlayingCard(true);
   }).catch(()=>{ if(token===state.token) setPlayUI("play"); });
 }
