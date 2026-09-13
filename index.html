@@ -382,7 +382,7 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 .scrim.open{ opacity:1; pointer-events:auto; }
 .dlg{
   position:fixed; z-index:61; left:50%; top:50%;
-  width:min(920px, calc(100vw - 32px)); max-height:min(760px, calc(100dvh - 40px));
+  width:min(920px, calc(100vw - 32px)); max-height:min(920px, calc(100dvh - 40px));
   transform:translate(-50%,-50%) scale(.9) translateY(30px); opacity:0; pointer-events:none;
   background:
     radial-gradient(120% 90% at 12% 0%, color-mix(in srgb, var(--dpc, var(--primary-container)) 34%, transparent), transparent 60%),
@@ -425,7 +425,7 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 }
 .song-title{ margin:0; padding-top:12px; font-size:clamp(19px,2.6vw,25px); font-weight:800; letter-spacing:.01em; line-height:1.3; word-break:break-all; }
 .song-author{
-  margin-top:10px; display:inline-flex; align-items:center; gap:7px; align-self:flex-start;
+  display:inline-flex; align-items:center; gap:7px; align-self:flex-start;
   background:var(--dpc, var(--primary-container)); color:var(--dopc, var(--on-primary-container));
   padding:8px 16px; border-radius:99px; font-size:13px; letter-spacing:.04em;
   transition:background .6s, color .6s; max-width:100%;
@@ -473,7 +473,7 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 .slider::-moz-range-track{ height:5px; border-radius:99px; background:var(--surface-container-highest); }
 .slider::-moz-range-progress{ height:5px; border-radius:99px; background:var(--fill, var(--primary)); }
 .slider::-moz-range-thumb{ width:18px; height:18px; border:0; border-radius:50%; background:var(--fill, var(--primary)); }
-.seek-row{ display:flex; align-items:center; gap:12px; }
+.seek-row{ display:flex; align-items:center; gap:12px; margin-bottom: 11px; }
 .seek-row .slider{ flex:1; }
 #seekSlider{ --fill:var(--dp, var(--primary)); }
 #volSlider{ --fill:var(--on-surface-variant); width:96px; }
@@ -519,7 +519,7 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
   -webkit-mask-image:linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
 }
 .lyrics-scroll{
-  height:clamp(190px, 45vh, 430px); overflow-y:auto; padding:34% 22px 40%;
+  height:clamp(190px, 45vh, 430px); overflow-y:auto; padding:0% 22px 24%;
   scrollbar-width:none;
 }
 .lyrics-scroll::-webkit-scrollbar{ display:none; }
