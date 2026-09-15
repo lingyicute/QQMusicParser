@@ -1194,7 +1194,7 @@ audio.addEventListener("ended", ()=>{
 audio.addEventListener("error", ()=>{
   if(!audio.src) return;
   setPlayUI("play");
-  skipOnCopyright("音频加载失败，该歌曲可能受版权保护");
+  skipOnCopyright("音频加载失败，重新点击该歌曲试试");
 });
 seekSlider.addEventListener("input", ()=>{
   seeking=true;
@@ -1410,7 +1410,7 @@ async function playAt(index, auto=false){
   // UI reset (note: the `url` field returned by the API is intentionally ignored)
   songTitle.textContent = song.title || "未知曲目";
   songAuthor.textContent = song.author || "未知歌手";
-  midNote.textContent = "MID · "+song.songmid;
+  midNote.textContent = song.songmid ? "MID · " + song.songmid : "";
   dlgTag.textContent = "Track "+(index+1)+" / "+state.songs.length;
   document.title = (song.title||"未知曲目")+" - "+(song.author||"")+" · Playlist Parser";
   setCover(song, token);
