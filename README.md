@@ -2,6 +2,8 @@
 
 QQ Music Playlist Parser 
 
+输入 QQ 音乐歌单的纯数字 ID，即可解析全部曲目、歌手、专辑封面与歌词，并在线播放。
+
 ![image](screenshot.png)
 
 ## 🗂️ License
