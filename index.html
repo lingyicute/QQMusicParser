@@ -780,14 +780,27 @@ const api = (server,type,id) => `https://vercel-meting-api.musifei.org/api?serve
 
 /* ================= 收集库相关 =================
  * - 页面加载后立即静默拉取 list.txt，存入 musicdbList。
- * - 在线拿不到播放地址 / 封面 / 歌词时，用收集库兜底。
+ * - 播放地址：统一先查收集库（命中即播），收集库未收录 / 超时 / 异常时才调用音乐源。
+ * - 封面 / 歌词：仍为在线优先、收集库兜底。
  * - 上报前先查 musicdbList，已收集的不上报。
  */
 const MUSICDB_BASE = "https://musicdb.92li.uk";
 const MUSICDB_ENABLED = true;
+const MUSICDB_TIMEOUT = 6000;       // 收集库单次请求超时：超时视为“未收录”，把播放交给音乐源
 let musicdbList = new Set();        // 已收集集合：每项为【歌名-歌手】
 let musicdbListLoaded = false;      // list.txt 是否成功加载过
-const musicdbInfoCache = new Map(); // stem -> info.json 内容（null 表示无/失败），避免重复请求
+/* stem -> Promise<info.json 内容 | null>（null 表示无/失败）。
+ * 缓存 Promise 而非结果：预取与点击并发查同一首歌时天然去重，只发一次请求。 */
+const musicdbInfoCache = new Map();
+
+/* 收集库请求统一封装：带超时，收集库慢 / 挂掉时不拖住播放 */
+async function fetchMusicdb(path, timeout = MUSICDB_TIMEOUT){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), timeout);
+  try{
+    return await fetch(MUSICDB_BASE + path, { cache:"no-store", signal: ctrl.signal });
+  }finally{ clearTimeout(timer); }
+}
 
 /* 与 Worker 侧 sanitizeName 完全一致的清洗函数，保证算出的 stem 与 list.txt / 文件夹名一致 */
 function sanitizeStem(s, maxLen){
@@ -810,7 +823,7 @@ function songStem(song){
 async function loadMusicdbList(){
   if(!MUSICDB_ENABLED) return;
   try{
-    const r = await fetch(MUSICDB_BASE + "/list.txt", { cache: "no-store" });
+    const r = await fetchMusicdb("/list.txt");
     if(!r.ok) return;
     const set = new Set();
     for(const line of (await r.text()).split("\n")){
@@ -822,25 +835,54 @@ async function loadMusicdbList(){
     if(console && console.info) console.info("[musicdb] 已收集 " + set.size + " 首");
   }catch(_){ /* 静默失败 */ }
 }
-loadMusicdbList();
+const musicdbReady = loadMusicdbList(); // 预取 info.json 前先等 list.txt 就绪
 
-/* 取收集库中某歌的 info.json（含各文件真实文件名），带缓存。
- * 即使不在 list.txt 中也尝试一次（容忍目录过期 / 当天刚归档），404 则记 null。 */
+/* 取收集库中某歌的 info.json（含各文件真实文件名），带缓存（缓存 Promise，见上）。
+ * 即使不在 list.txt 中也尝试一次（容忍目录过期 / 当天刚归档），超时 / 404 则记 null。 */
 async function getCollectionInfo(song){
   if(!MUSICDB_ENABLED) return null;
   let stem = "";
   try{ stem = songStem(song); }catch(_){ return null; }
   if(musicdbInfoCache.has(stem)) return musicdbInfoCache.get(stem);
-  let info = null;
-  try{
-    const r = await fetch(MUSICDB_BASE + "/" + encodeURIComponent(stem) + "/info.json");
-    if(r.ok){
-      const j = await r.json();
-      if(j && j.files && j.files.audio) info = j;
+  const task = (async ()=>{
+    try{
+      const r = await fetchMusicdb("/" + encodeURIComponent(stem) + "/info.json");
+      if(r.ok){
+        const j = await r.json();
+        if(j && j.files && j.files.audio) return j;
+      }
+    }catch(_){ /* 无此歌 / 超时 / 网络失败 */ }
+    return null;
+  })();
+  musicdbInfoCache.set(stem, task);
+  return task;
+}
+
+/* 收集库优先取播放地址：命中返回直链，未收录 / 超时 / 异常统一返回 "" */
+async function getCollectionAudioUrl(song){
+  try{ return (await getCollectionFileUrl(song, "audio")) || ""; }catch(_){ return ""; }
+}
+
+/* 预取：list.txt 命中的曲子，歌单渲染后后台并发预取 info.json，
+ * 让点击时直接命中缓存 —— 「收集库优先」不引入额外等待（不命中则点击时现查）。 */
+let prefetchToken = 0;
+async function prefetchCollectionInfo(concurrency = 4){
+  if(!MUSICDB_ENABLED) return;
+  const token = ++prefetchToken;
+  await musicdbReady;                    // 等 list.txt 就绪
+  if(token !== prefetchToken) return;    // 期间解析了新歌单，作废
+  const pending = state.songs.filter(s=>{
+    try{ const stem = songStem(s); return musicdbList.has(stem) && !musicdbInfoCache.has(stem); }
+    catch(_){ return false; }
+  });
+  if(!pending.length) return;
+  let i = 0;
+  const worker = async ()=>{
+    while(i < pending.length && token === prefetchToken){
+      await getCollectionInfo(pending[i++]); // 失败静默，结果进缓存
     }
-  }catch(_){ /* 无此歌或网络失败 */ }
-  musicdbInfoCache.set(stem, info);
-  return info;
+  };
+  for(let k=0, n=Math.min(concurrency, pending.length); k<n; k++) worker();
 }
 
 /* 取收集库文件直链，kind: "audio" | "cover" | "lyric"；无则返回 null */
@@ -1194,6 +1236,12 @@ audio.addEventListener("ended", ()=>{
 audio.addEventListener("error", ()=>{
   if(!audio.src) return;
   setPlayUI("play");
+  /* 收集库文件异常（404 / 损坏 / 被拦截）→ 同一首歌再走一次音乐源，只回退一次 */
+  if(state.playingFromCollection && !state.collectionFallbackDone && state.currentIndex>=0){
+    state.collectionFallbackDone = true;
+    playAt(state.currentIndex, true, { skipCollection:true });
+    return;
+  }
   skipOnCopyright("音频加载失败，重新点击该歌曲试试");
 });
 seekSlider.addEventListener("input", ()=>{
@@ -1302,7 +1350,11 @@ async function loadLyrics(url, token){
 }
 
 /* ================= State ================= */
-const state = { songs:[], currentIndex:-1, token:0, mode:"list" /* list | one | once */, skipCount:0 };
+const state = {
+  songs:[], currentIndex:-1, token:0, mode:"list" /* list | one | once */, skipCount:0,
+  playingFromCollection:false, // 当前播放地址是否来自收集库（文件异常时回退音乐源用）
+  collectionFallbackDone:false // 本曲是否已因收集库文件异常回退过音乐源（防循环）
+};
 
 /* ================= Play Mode Switch ================= */
 /* list = 列表循环；one = 单曲循环；once = 仅播放此曲目一次 */
@@ -1399,7 +1451,7 @@ async function setCover(song, token){
   img.src=pic;
 }
 
-async function playAt(index, auto=false){
+async function playAt(index, auto=false, opts={}){
   const song = state.songs[index];
   if(!song) return;
   if(!auto) state.skipCount = 0; // 手动选择曲目时重置连续跳过计数
@@ -1417,7 +1469,9 @@ async function playAt(index, auto=false){
   seekSlider.value=0; seekSlider.style.setProperty("--val","0%");
   curTime.textContent="0:00"; durTime.textContent="0:00";
   setPlayUI("loading");
-  dlgStatus.classList.add("show"); dlgStatusText.textContent="正在解析播放地址…";
+  dlgStatus.classList.add("show"); dlgStatusText.textContent="正在查询收集库…";
+  state.playingFromCollection = false;                    // 每首重新判定播放来源
+  if(!opts.skipCollection) state.collectionFallbackDone = false; // 收集库→音乐源的回退只做一次
   audio.pause(); audio.removeAttribute("src");
 
   // Dynamic accent from cover (non-blocking, uses effective cover incl. collection fallback)
@@ -1432,18 +1486,19 @@ async function playAt(index, auto=false){
   // Lyrics：在线（歌单 lrc → song API 刷新）优先，都没有则用收集库兜底
   resolveLyrics(song, token);
 
-  // Resolve real playable URL via JSONP resolver；在线失败则用收集库兜底
-  let url = await QQMusicResolver.getRealUrl(song.songmid);
+  /* ① 收集库优先：命中即播（info.json 结果已缓存，命中时通常无需等网络） */
+  let url = opts.skipCollection ? "" : await getCollectionAudioUrl(song);
   if(token!==state.token) return;
   let fromCollection = false;
-  if(!url){
-    dlgStatusText.textContent="在线解析失败，正在尝试查询收集库…";
-    url = await getCollectionFileUrl(song, "audio");
+  if(url){
+    fromCollection = true;
+    state.playingFromCollection = true;
+    dlgTag.textContent += " · 收集库";
+  }else{
+    /* ② 收集库未收录 → 调用音乐源（JSONP 解析器） */
+    dlgStatusText.textContent="收集库未收录，正在解析播放地址…";
+    url = await QQMusicResolver.getRealUrl(song.songmid);
     if(token!==state.token) return;
-    if(url){
-      fromCollection = true;
-      dlgTag.textContent += " · 收集库";
-    }
   }
   dlgStatus.classList.remove("show");
   if(!url){
@@ -1545,6 +1600,7 @@ async function loadPlaylist(id){
     }
     state.songs = data;
     renderSongs();
+    prefetchCollectionInfo(); // 后台预取收集库信息，保证「收集库优先」不引入点击等待
     secTitle.textContent = "解析成功";
     secSub.textContent = "Playlist #"+id+" · 共 "+data.length+" 首曲目";
     secHead.classList.add("show");
