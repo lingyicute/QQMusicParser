@@ -784,6 +784,14 @@ const api = (server,type,id) => `https://vercel-meting-api.musifei.org/api?serve
  * - 封面 / 歌词：仍为在线优先、收集库兜底。
  * - 上报前先查 musicdbList，已收集的不上报。
  */
+/* 网易云 Parser 对协作艺人统一使用 " / " 作为分隔符。
+ * QQ 歌单源也可能返回紧凑的 "艺人A/艺人B" 或数组；在生成 stem、显示和上报前统一格式，
+ * 避免同一首合作曲因斜杠两侧空格不同而与收集库目录 / aliases.json 错位。 */
+function normalizeSinger(s){
+  if(Array.isArray(s)) s = s.map(v => typeof v === "string" ? v : (v && (v.name || v.title)) || "").join("/");
+  return String(s || "").replace(/[／⁄]/g, "/").split("/").map(t => t.trim()).filter(Boolean).join(" / ");
+}
+
 const MUSICDB_BASE = "https://musicdb.92li.uk";
 const MUSICDB_ENABLED = true;
 const MUSICDB_TIMEOUT = 6000;       // 收集库单次请求超时：超时视为“未收录”，把播放交给音乐源
@@ -1661,7 +1669,11 @@ async function loadPlaylist(id){
         "未找到该歌单", "请检查歌单 ID 是否正确，或更换一个试试");
       return;
     }
-    state.songs = data;
+    // 与 163 Parser 一致：合作歌手统一成 "歌手 A / 歌手 B"，保证 stem 与曲库身份稳定。
+    state.songs = data.map(s => {
+      const song = s && typeof s === "object" ? s : {};
+      return Object.assign({}, song, { author: normalizeSinger(song.author || song.singer) });
+    });
     renderSongs();
     prefetchCollectionInfo(); // 后台预取收集库信息，保证「收集库优先」不引入点击等待
     secTitle.textContent = "解析成功";
