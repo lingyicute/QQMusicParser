@@ -792,6 +792,7 @@ let musicdbListLoaded = false;      // list.txt 是否成功加载过
 /* stem -> Promise<info.json 内容 | null>（null 表示无/失败）。
  * 缓存 Promise 而非结果：预取与点击并发查同一首歌时天然去重，只发一次请求。 */
 const musicdbInfoCache = new Map();
+const MUSICDB_NEGATIVE_TTL = 30000; // 404/timeout 只负缓存 30 秒，避免本会话永久失去恢复机会
 
 /* 收集库请求统一封装：带超时，收集库慢 / 挂掉时不拖住播放 */
 async function fetchMusicdb(path, timeout = MUSICDB_TIMEOUT){
@@ -880,7 +881,11 @@ async function getCollectionInfo(song){
   await musicdbReady;
   let stem = "";
   try{ stem = collectionStem(song); }catch(_){ return null; }
-  if(musicdbInfoCache.has(stem)) return musicdbInfoCache.get(stem);
+  if(musicdbInfoCache.has(stem)){
+    const cached = musicdbInfoCache.get(stem);
+    if(cached.expiresAt > Date.now()) return cached.promise;
+    musicdbInfoCache.delete(stem);
+  }
   const task = (async ()=>{
     try{
       const r = await fetchMusicdb("/" + encodeURIComponent(stem) + "/info.json");
@@ -891,7 +896,11 @@ async function getCollectionInfo(song){
     }catch(_){ /* 无此歌 / 超时 / 网络失败 */ }
     return null;
   })();
-  musicdbInfoCache.set(stem, task);
+  const entry = { promise: task, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
+  musicdbInfoCache.set(stem, entry);
+  task.then(value=>{ if(!value && musicdbInfoCache.get(stem) === entry) entry.expiresAt = Date.now() + MUSICDB_NEGATIVE_TTL; }, ()=>{
+    if(musicdbInfoCache.get(stem) === entry) entry.expiresAt = Date.now() + MUSICDB_NEGATIVE_TTL;
+  });
   return task;
 }
 
@@ -938,20 +947,35 @@ async function resolveCoverUrl(song){
 }
 
 /* 歌词解析：歌单 lrc → song API 刷新 → 收集库兜底（fire-and-forget，token 做过期保护） */
+async function fetchWithTimeout(url, timeout=10000, options={}){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), timeout);
+  try{ return await fetch(url, { ...options, signal: ctrl.signal }); }
+  finally{ clearTimeout(timer); }
+}
+async function lyricUrlWorks(url, token){
+  try{
+    const r = await fetchWithTimeout(url, 8000, { cache:"no-store" });
+    if(!r.ok) return false;
+    const text = await r.text();
+    return !!text.trim() && !/^\s*(?:<!doctype|<html|\{)/i.test(text);
+  }catch(_){ return false; }
+}
+
 async function resolveLyrics(song, token){
   const alive = () => token === state.token;
   if(song.lrc) loadLyrics(song.lrc, token); // loadLyrics 内部先渲染骨架
   else renderLyricsSkeleton();               // 先占位，避免残留上一首歌词
   // 在线刷新（原有逻辑：song API 的 url 字段忽略，只取 lrc）
   try{
-    const r = await fetch(api("tencent", "song", song.songmid));
+    const r = await fetchWithTimeout(api("tencent", "song", song.songmid), 10000);
     const arr = await r.json();
     if(!alive()) return;
     const s = Array.isArray(arr) && arr[0];
     if(s && s.lrc && s.lrc !== song.lrc){ song.lrc = s.lrc; loadLyrics(s.lrc, token); return; }
   }catch(_){ /* 在线失败则继续走兜底 */ }
   if(!alive()) return;
-  if(song.lrc) return; // 在线已有（歌单自带或刚刷新到），不再兜底
+  if(song.lrc && await lyricUrlWorks(song.lrc, token)) return;
   const colUrl = await getCollectionFileUrl(song, "lyric");
   if(!alive()) return;
   if(colUrl) loadLyrics(colUrl, token);
@@ -992,6 +1016,7 @@ async function reportToCollector(song, fileUrl){
         url:    fileUrl,
         lrc:    song.lrc    || "",
         songmid:  song.songmid || "",
+        server:   "tencent",
         duration: Math.round(dur)
       };
       if(!payload.title || !payload.author || !payload.url) return;
@@ -1372,7 +1397,7 @@ function centerTarget(v){ return Math.max(0, v); }
 async function loadLyrics(url, token){
   renderLyricsSkeleton();
   try{
-    const r = await fetch(url);
+    const r = await fetchWithTimeout(url, 10000);
     if(!r.ok) throw 0;
     let text = await r.text();
     const t=text.trim();
@@ -1625,7 +1650,7 @@ async function loadPlaylist(id){
   hero.classList.add("compact");
 
   try{
-    const r = await fetch(api("tencent","playlist",id));
+    const r = await fetchWithTimeout(api("tencent","playlist",id), 15000);
     if(!r.ok) throw new Error("HTTP "+r.status);
     const data = await r.json();
     if(token!==plToken) return;
