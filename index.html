@@ -780,7 +780,9 @@ const api = (server,type,id) => `https://vercel-meting-api.musifei.org/api?serve
 
 /* ================= 收集库相关 =================
  * - 页面加载后立即静默拉取 list.txt，存入 musicdbList。
- * - 播放地址：统一先查收集库（命中即播），收集库未收录 / 超时 / 异常时才调用音乐源。
+ * - 播放地址：先查收集库（命中即播），但给收集库 5 秒起播预算：
+ *     超过 5 秒还没出声 → 中断到收集库的连接，自动改走在线源；
+ *     在线源播放出任何问题 → 回退收集库（两个方向各只回退一次）。
  * - 封面 / 歌词：仍为在线优先、收集库兜底。
  * - 上报前先查 musicdbList，已收集的不上报。
  */
@@ -795,6 +797,15 @@ function normalizeSinger(s){
 const MUSICDB_BASE = "https://musicdb.92li.uk";
 const MUSICDB_ENABLED = true;
 const MUSICDB_TIMEOUT = 6000;       // 收集库单次请求超时：超时视为“未收录”，把播放交给音乐源
+
+/* ===== 播放源回退策略 =====
+ * - 收集库：从点击起 5 秒内没能真正出声（info.json 查询 + 音频缓冲共用这份预算）
+ *           → 中断到收集库的连接，自动改走在线源；
+ * - 在线源：解析失败 / 播放报错 / 起播超时 → 回退收集库；
+ * - 每个方向只回退一次（state.collectionFallbackDone / state.onlineFallbackDone）。 */
+const COLLECTION_START_TIMEOUT = 5000;  // 收集库 5 秒内必须起播，否则切在线源
+const ONLINE_START_TIMEOUT = 10000;     // 在线源起播超时，超过则回退收集库
+
 let musicdbList = new Set();        // 已收集集合：每项为【歌名-歌手】
 let musicdbListLoaded = false;      // list.txt 是否成功加载过
 /* stem -> Promise<info.json 内容 | null>（null 表示无/失败）。
@@ -894,6 +905,7 @@ async function getCollectionInfo(song){
     if(cached.expiresAt > Date.now()) return cached.promise;
     musicdbInfoCache.delete(stem);
   }
+  /* 失败结果由 MUSICDB_NEGATIVE_TTL（30 秒负缓存）处理 */
   const task = (async ()=>{
     try{
       const r = await fetchMusicdb("/" + encodeURIComponent(stem) + "/info.json");
@@ -915,6 +927,18 @@ async function getCollectionInfo(song){
 /* 收集库优先取播放地址：命中返回直链，未收录 / 超时 / 异常统一返回 "" */
 async function getCollectionAudioUrl(song){
   try{ return (await getCollectionFileUrl(song, "audio")) || ""; }catch(_){ return ""; }
+}
+
+/* 带「5 秒预算」的收集库查询：
+ * info.json 查询与随后的音频缓冲共用同一份预算，先超预算就先认失败。
+ * 被放弃的查询仍在后台继续（体积很小），结果会进缓存，供在线源失败后的回退直接命中。 */
+function getCollectionAudioUrlWithin(song, deadline){
+  const remain = deadline - Date.now();
+  if(remain <= 0) return Promise.resolve("");
+  let timer = 0;
+  const lookup  = getCollectionAudioUrl(song);
+  const timeout = new Promise(resolve => { timer = setTimeout(()=>resolve(""), remain); });
+  return Promise.race([lookup, timeout]).finally(()=>clearTimeout(timer));
 }
 
 /* 预取：list.txt 命中的曲子，歌单渲染后后台并发预取 info.json，
@@ -1244,6 +1268,117 @@ const volSlider=$("#volSlider"), volBtn=$("#volBtn"), icVol=$("#icVol"), icMute=
 const dlgStatus=$("#dlgStatus"), dlgStatusText=$("#dlgStatusText");
 let seeking=false;
 
+/* ================= 起播看门狗 & 播放源回退 =================
+ * 规则（超时常量见文件上方的 COLLECTION_START_TIMEOUT / ONLINE_START_TIMEOUT）：
+ *  - 收集库：从点击起 5 秒内没能真正出声 → 中断到收集库的连接，改走在线源；
+ *  - 在线源：解析失败 / 播放报错 / 起播超时 → 回退收集库；
+ *  - 两个方向各只回退一次（state.collectionFallbackDone / state.onlineFallbackDone），防来回死循环。
+ */
+let startWatchdog = 0;                       // 当前「必须起播」的计时器
+function clearStartWatchdog(){
+  if(startWatchdog){ clearTimeout(startWatchdog); startWatchdog = 0; }
+}
+function armStartWatchdog(token, ms, onTimeout){
+  clearStartWatchdog();
+  const fire = ()=>{ startWatchdog = 0; if(token === state.token) onTimeout(); };
+  if(ms <= 0){ fire(); return; }
+  startWatchdog = setTimeout(fire, ms);
+}
+
+/* 当前媒体加载尝试的守卫：同一次失败可能同时触发 error 与 play().catch，只回退一次 */
+let mediaGuard = { token:-1, done:true };
+
+/* 彻底停掉当前音频：暂停 + 清空 src + load()，立即中断正在进行的网络连接 */
+function stopAudio(){
+  mediaGuard = { token:-1, done:true, started:false };
+  try{ audio.pause(); }catch(_){}
+  audio.removeAttribute("src");
+  try{ audio.load(); }catch(_){}
+}
+
+/* 换上新地址，并重置本次尝试的守卫 */
+function startAudio(token, url){
+  mediaGuard = { token, done:false, started:false };
+  audio.src = url;
+}
+
+/* 看门狗到点时复核「是否真的已经播过」：
+ * 不看 playing 事件（可能是上一个源迟到的），只看播放进度有没有真的走过。
+ * - started：timeupdate 里记录「播放中且进度 > 0」；
+ * - 兜底看 currentTime + 非暂停，兼容刚开始播、timeupdate 还没来的情况。
+ * 这样用户「暂停后拖动进度条」不会被误判成已起播。 */
+function mediaStarted(){
+  if(mediaGuard.started) return true;          // timeupdate 已确认真的播过
+  try{
+    /* played 记录「真实播放过的区间」，拖动进度条不会写入，能避开 seek 误判 */
+    const p = audio.played;
+    if(p && p.length > 0 && p.end(p.length - 1) > 0) return true;
+  }catch(_){ /* 个别环境不支持 played */ }
+  return false;
+}
+
+/* 当前源播放失败（error / play() 被拒 / 起播超时）→ 按策略换源；返回是否已安排回退 */
+function handleSourceFailure(reason){
+  if(mediaGuard.done || mediaGuard.token !== state.token || state.currentIndex < 0) return false;
+  mediaGuard.done = true;
+  if(state.playingFromCollection){
+    /* 收集库出问题 → 在线源（只切一次；在线源已经失败过就不再切回去） */
+    if(state.collectionFallbackDone || state.onlineFallbackDone) return false;
+    state.collectionFallbackDone = true;
+    stopAudio();
+    dlgStatus.classList.remove("show");
+    snack("收集库播放异常（"+reason+"），已切换在线源");
+    playAt(state.currentIndex, true, { fallback:true, skipCollection:true });
+    return true;
+  }
+  /* 在线源出问题 → 回退收集库（只回退一次） */
+  if(state.onlineFallbackDone) return false;
+  state.onlineFallbackDone = true;
+  stopAudio();
+  dlgStatus.classList.remove("show");
+  snack("在线源播放异常（"+reason+"），已回退收集库");
+  playAt(state.currentIndex, true, { fallback:true, skipOnline:true });
+  return true;
+}
+
+/* 收集库 5 秒没起播 → 中断连接改在线源；若收集库已是二次尝试，则放弃并跳曲 */
+function onCollectionStartTimeout(token){
+  if(token !== state.token || !state.playingFromCollection) return;
+  if(mediaStarted()) return;                       // 已经出声（事件迟到 / 用户已暂停）→ 不换源
+  if(state.userPaused){ dlgStatus.classList.remove("show"); return; } // 用户暂停中：不换源也不跳曲
+  if(state.collectionFallbackDone || state.onlineFallbackDone){
+    stopAudio();
+    dlgStatus.classList.remove("show");
+    setPlayUI("play");
+    skipOnCopyright("收集库音频加载超时，已跳过");
+    return;
+  }
+  state.collectionFallbackDone = true;
+  stopAudio();                                  // 关键：中断到收集库的连接（含在途缓冲）
+  dlgStatus.classList.remove("show");
+  snack("收集库 5 秒内未能起播，已自动切换在线源");
+  playAt(state.currentIndex, true, { fallback:true, skipCollection:true });
+}
+
+/* 在线源起播超时 → 回退收集库；在线源已是二次尝试则放弃并跳曲 */
+function onOnlineStartTimeout(token){
+  if(token !== state.token || state.playingFromCollection) return;
+  if(mediaStarted()) return;                       // 已经出声 → 不换源
+  if(state.userPaused){ dlgStatus.classList.remove("show"); return; } // 用户暂停中：不换源也不跳曲
+  if(state.onlineFallbackDone){
+    stopAudio();
+    dlgStatus.classList.remove("show");
+    setPlayUI("play");
+    skipOnCopyright("在线源加载超时，已跳过");
+    return;
+  }
+  state.onlineFallbackDone = true;
+  stopAudio();
+  dlgStatus.classList.remove("show");
+  snack("在线源加载超时，已回退收集库");
+  playAt(state.currentIndex, true, { fallback:true, skipOnline:true });
+}
+
 function setPlayUI(mode){ // 'loading' | 'play' | 'pause'
   spin.style.display   = mode==="loading" ? "block" : "none";
   icPlay.style.display = mode==="play"    ? "block" : "none";
@@ -1253,13 +1388,26 @@ setPlayUI("play");
 
 playBtn.addEventListener("click", ()=>{
   if(!audio.src) return;
-  if(audio.paused) audio.play().catch(()=>snack("播放失败，可能受版权保护"));
-  else audio.pause();
+  if(audio.paused){
+    state.userPaused = false;
+    audio.play().catch(()=>snack("播放失败，可能受版权保护"));
+    /* 从「还没起播过」的状态恢复播放：重新挂上看门狗，仍然卡住就按原策略换源 */
+    if(!mediaStarted()){
+      const t = state.token;
+      if(state.playingFromCollection) armStartWatchdog(t, COLLECTION_START_TIMEOUT, ()=>onCollectionStartTimeout(t));
+      else                            armStartWatchdog(t, ONLINE_START_TIMEOUT,    ()=>onOnlineStartTimeout(t));
+    }
+  }
+  else { state.userPaused = true; audio.pause(); }
 });
-audio.addEventListener("play",  ()=>{ setPlayUI("pause"); markPlayingCard(true); });
+audio.addEventListener("play",  ()=>{ state.userPaused = false; setPlayUI("pause"); markPlayingCard(true); });
 audio.addEventListener("pause", ()=>{ setPlayUI("play");  markPlayingCard(false); });
+/* 真正出声：隐藏状态条。看门狗不在这里撤销 —— 迟到的 playing 可能来自上一个源，
+ * 统一由看门狗到点时用 mediaStarted() 复核，避免看门狗被误清后卡死。 */
+audio.addEventListener("playing", ()=>{ dlgStatus.classList.remove("show"); });
 audio.addEventListener("loadedmetadata", ()=>{ durTime.textContent = fmtTime(audio.duration); });
 audio.addEventListener("timeupdate", ()=>{
+  if(!audio.paused && audio.currentTime > 0) mediaGuard.started = true; // 记为「真的播过」
   if(!seeking && isFinite(audio.duration) && audio.duration>0){
     seekSlider.value = Math.round(audio.currentTime / audio.duration * 1000);
     seekSlider.style.setProperty("--val", (seekSlider.value/10)+"%");
@@ -1306,13 +1454,12 @@ audio.addEventListener("ended", ()=>{
 });
 audio.addEventListener("error", ()=>{
   if(!audio.src) return;
+  /* 旧尝试的迟到事件（已 stopAudio / 已换源）直接忽略，别误判成当前源失败去跳曲 */
+  if(mediaGuard.token !== state.token || mediaGuard.done) return;
   setPlayUI("play");
-  /* 收集库文件异常（404 / 损坏 / 被拦截）→ 同一首歌再走一次音乐源，只回退一次 */
-  if(state.playingFromCollection && !state.collectionFallbackDone && state.currentIndex>=0){
-    state.collectionFallbackDone = true;
-    playAt(state.currentIndex, true, { skipCollection:true });
-    return;
-  }
+  /* 收集库文件异常（404 / 损坏 / 被拦截）→ 在线源；
+     在线源异常 → 回退收集库；两边都只回退一次（见 handleSourceFailure） */
+  if(handleSourceFailure("文件异常")) return;
   skipOnCopyright("音频加载失败，重新点击该歌曲试试");
 });
 seekSlider.addEventListener("input", ()=>{
@@ -1424,7 +1571,9 @@ async function loadLyrics(url, token){
 const state = {
   songs:[], currentIndex:-1, token:0, mode:"list" /* list | one | once */, skipCount:0,
   playingFromCollection:false, // 当前播放地址是否来自收集库（文件异常时回退音乐源用）
-  collectionFallbackDone:false // 本曲是否已因收集库文件异常回退过音乐源（防循环）
+  collectionFallbackDone:false, // 本曲是否已从「收集库」回退到「在线源」（只回退一次，防循环）
+  onlineFallbackDone:false,     // 本曲是否已从「在线源」回退到「收集库」（只回退一次，防循环）
+  userPaused:false              // 用户手动按了暂停：回退换源时不要自动续播
 };
 
 /* ================= Play Mode Switch ================= */
@@ -1477,7 +1626,8 @@ function closeDialog(){
   scrim.classList.remove("open");
   dlg.classList.remove("open");
   document.body.style.overflow="";
-  audio.pause(); audio.removeAttribute("src"); audio.load();
+  clearStartWatchdog();
+  stopAudio();
   state.token++;
   markPlayingCard(false); state.currentIndex=-1;
   clearDynamicPalette();
@@ -1540,10 +1690,17 @@ async function playAt(index, auto=false, opts={}){
   seekSlider.value=0; seekSlider.style.setProperty("--val","0%");
   curTime.textContent="0:00"; durTime.textContent="0:00";
   setPlayUI("loading");
-  dlgStatus.classList.add("show"); dlgStatusText.textContent="正在查询收集库…";
-  state.playingFromCollection = false;                    // 每首重新判定播放来源
-  if(!opts.skipCollection) state.collectionFallbackDone = false; // 收集库→音乐源的回退只做一次
-  audio.pause(); audio.removeAttribute("src");
+  dlgStatus.classList.remove("show");
+  state.playingFromCollection = false;                    // 每次尝试重新判定播放来源
+  if(!opts.fallback){                                     // 只有新的一次播放才重置回退记录（回退时保留，防死循环）
+    state.collectionFallbackDone = false;
+    state.onlineFallbackDone = false;
+    state.userPaused = false;                             // 新的一次播放：恢复自动播放
+  }
+  stopAudio();                                            // 中断上一首 / 上一个源的连接
+
+  /* 收集库「5 秒内必须起播」的总预算：从本次播放进入起算，包含 info.json 查询与音频缓冲 */
+  const collectionDeadline = Date.now() + COLLECTION_START_TIMEOUT;
 
   // Dynamic accent from cover (non-blocking, uses effective cover incl. collection fallback)
   resolveCoverUrl(song).then(pic=>{
@@ -1557,35 +1714,86 @@ async function playAt(index, auto=false, opts={}){
   // Lyrics：在线（歌单 lrc → song API 刷新）优先，都没有则用收集库兜底
   resolveLyrics(song, token);
 
-  /* ① 收集库优先：命中即播（info.json 结果已缓存，命中时通常无需等网络） */
-  let url = opts.skipCollection ? "" : await getCollectionAudioUrl(song);
-  if(token!==state.token) return;
+  let url = "";
   let fromCollection = false;
-  if(url){
-    fromCollection = true;
-    state.playingFromCollection = true;
-    dlgTag.textContent += " · 收集库";
-  }else{
-    /* ② 收集库未收录 → 调用音乐源（JSONP 解析器） */
-    dlgStatusText.textContent="收集库未收录，正在解析播放地址…";
-    url = await QQMusicResolver.getRealUrl(song.songmid);
+
+  /* ① 收集库优先：命中即播（info.json 结果已缓存，命中时通常无需等网络）
+   *    超过 5 秒预算即视为失败，不在这里干等 */
+  if(!opts.skipCollection){
+    dlgStatus.classList.add("show");
+    dlgStatusText.textContent = "正在查询收集库…";
+    url = await getCollectionAudioUrlWithin(song, collectionDeadline);
+    if(token!==state.token) return;
+    if(url && Date.now() < collectionDeadline){
+      fromCollection = true;
+      state.playingFromCollection = true;
+      dlgTag.textContent += " · 收集库";
+    }else{
+      if(url) state.collectionFallbackDone = true; // 查询本身就用完了 5 秒预算：算收集库失败
+      url = "";
+    }
+  }
+
+  /* ② 在线源：收集库未收录 / 超时 → 调用音乐源（JSONP 解析器） */
+  if(!url && !opts.skipOnline){
+    dlgStatus.classList.add("show");
+    dlgStatusText.textContent = opts.skipCollection ? "正在解析在线源播放地址…" : "收集库未收录，正在解析在线源…";
+    try{ url = await QQMusicResolver.getRealUrl(song.songmid); }catch(_){ url = ""; }
     if(token!==state.token) return;
   }
-  dlgStatus.classList.remove("show");
+
   if(!url){
+    dlgStatus.classList.remove("show");
     setPlayUI("play");
+    /* 在线源没解析到地址 → 若还没回退过收集库，再给收集库一次机会 */
+    if(!opts.skipOnline && !state.onlineFallbackDone){
+      state.onlineFallbackDone = true;
+      snack("在线源解析失败，回退收集库…");
+      playAt(index, true, { fallback:true, skipOnline:true });
+      return;
+    }
     skipOnCopyright("该歌曲因版权 / 付费限制暂时无法播放");
     return;
   }
   // 上报收集器：成功拿到在线 url，后台校验实际时长 >60s 后自动上报（不阻塞播放）；
   // 收集库播出的本来就已收集，不上报
   if(!fromCollection) reportToCollector(song, url);
-  audio.src=url;
-  audio.play().then(()=>{
-    if(token!==state.token) return;
-    state.skipCount = 0;
-    markPlayingCard(true);
-  }).catch(()=>{ if(token===state.token) setPlayUI("play"); });
+
+  /* ③ 开始加载：按来源开启「必须起播」的看门狗（到点用 mediaStarted() 复核，真播过就不换源） */
+  dlgStatus.classList.add("show");
+  if(fromCollection){
+    dlgStatusText.textContent = "正在从收集库加载…（5 秒内未起播将自动切换在线源）";
+    startAudio(token, url);
+    /* 用户主动暂停时不设起播期限：等他恢复播放时再由播放按钮重新计时 */
+    if(!state.userPaused) armStartWatchdog(token, collectionDeadline - Date.now(), ()=>onCollectionStartTimeout(token));
+  }else{
+    dlgStatusText.textContent = "正在加载在线源…（超时将回退收集库）";
+    startAudio(token, url);
+    if(!state.userPaused) armStartWatchdog(token, ONLINE_START_TIMEOUT, ()=>onOnlineStartTimeout(token));
+  }
+  if(state.userPaused){
+    /* 用户在上一个源加载途中按了暂停：换源但不自动续播，等他点播放 */
+    dlgStatus.classList.remove("show");
+    setPlayUI("play");
+  }else{
+    audio.play().then(()=>{
+      if(token!==state.token) return;
+      state.skipCount = 0;
+      markPlayingCard(true);
+    }).catch((err)=>{
+      if(token!==state.token) return;
+      setPlayUI("play");
+      /* 浏览器自动播放拦截（NotAllowedError）不是播放源的问题：
+         撤销看门狗并转为「等待用户点击播放」，否则定时器会一直换源、最后误跳曲 */
+      if(err && err.name === "NotAllowedError"){
+        clearStartWatchdog();
+        state.userPaused = true;
+        snack("浏览器拦截了自动播放，请点击播放按钮");
+        return;
+      }
+      handleSourceFailure("播放请求被拒绝");
+    });
+  }
 }
 $("#prevBtn").addEventListener("click", ()=>{
   if(!state.songs.length) return;
