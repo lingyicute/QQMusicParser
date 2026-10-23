@@ -416,8 +416,11 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 }
 .cover-col{ display:flex; flex-direction:column; gap:16px; min-height:0; }
 .cover{
-  /* 视口很矮时同步收窄，保持正方形；正常高度下仍是整列宽 300px */
-  width:min(100%, 42dvh); margin-inline:auto; aspect-ratio:1/1; border-radius:26px; overflow:hidden; position:relative;
+  /* 始终正方形：高度取左侧列里“标题/歌手/状态栏之外剩下的空间”，上限 300px（=列宽）；
+     窗口又宽又矮时按比例缩小，宽度由 aspect-ratio 反推，正常高度下就是 300×300，并且始终靠左 */
+  height:300px; width:auto; max-width:100%; aspect-ratio:1/1;
+  flex:0 1 auto; min-height:0; align-self:flex-start;
+  margin-inline:0; border-radius:26px; overflow:hidden; position:relative;
   background:linear-gradient(135deg, var(--dpc, var(--primary-container)), var(--tertiary-container));
   box-shadow:var(--shadow-2);
   transition:box-shadow .4s, border-radius .5s var(--ease-emph), background .6s;
@@ -426,6 +429,14 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 .cover img{ width:100%; height:100%; object-fit:cover; display:block; position:relative; z-index:1; }
 .cover .ph{ position:absolute; inset:0; display:grid; place-items:center; color:var(--dopc, var(--on-primary-container)); opacity:.55; }
 .cover .ph svg{ width:72px; height:72px; }
+
+/* 兜底：不支持 aspect-ratio 的浏览器（iOS 14 / Safari 14 及更早）用 padding-top 撑出 1:1，
+   保证封面在任何环境、任何布局下都不会变成非正方形 */
+@supports not (aspect-ratio: 1 / 1){
+  .cover{ width:100%; height:auto; flex:none; }
+  .cover::before{ content:""; display:block; padding-top:100%; }
+  .cover img{ position:absolute; inset:0; width:100%; height:100%; }
+}
 .cover.loading::after{
   content:""; position:absolute; inset:0;
   background:linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--surface) 45%, transparent) 50%, transparent 70%);
@@ -573,7 +584,6 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 @media(min-width:720px) and (max-height:640px){
   .dlg-top{ padding-top:8px; }
   .player{ padding:12px clamp(16px,3vw,28px) 18px; gap:clamp(16px,3vw,28px); }
-  .cover{ width:min(100%, 30dvh); }
   .song-title{ padding-top:6px; font-size:clamp(17px,2vw,20px); }
   .transport{ gap:14px; }
   .transport .t-btn{ width:44px; height:44px; }
@@ -584,8 +594,10 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
   .lyrics-head{ margin-bottom:8px; }
 }
 
-/* 极矮（<480px 高）的桌面窗口确实装不下了，此时恢复滚动 —— 这是真需要，不是几个像素的空滚动 */
-@media(min-width:720px) and (max-height:479px){
+
+/* 窗口高度 <300px 时连歌词最小可视高度都保不住，此时恢复滚动 —— 这是真需要，不是几个像素的空滚动。
+   300px 及以上都靠封面等比缩小来容纳，不出现滚动条 */
+@media(min-width:720px) and (max-height:299px){
   .dlg-inner{ overflow-y:auto; }
   .player{ grid-template-rows:auto; flex:0 0 auto; }
   .lyrics{ flex:0 0 auto; }
@@ -604,14 +616,12 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
   .dlg-inner{ overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
   .player{ grid-template-columns:1fr; grid-template-rows:auto; gap:20px; flex:none; }
   .cover-col{ max-width:270px; margin:0 auto; width:100%; }
-  .cover{ width:100%; }
+  .cover{ width:100%; height:auto; aspect-ratio:1/1; flex:none; }   /* 窄播放器同样强制正方形 */
+  .mid-note{ display:none; }        /* 窄播放器不显示歌曲 ID */
   .lyrics{ flex:none; min-height:160px; }
   .lyrics-scroll{ height:clamp(155px, 24vh, 250px); }
   .dlg-top{ padding-top:8px; }
-  .grip{ display:block !important; }
 }
-.grip{ display:none; width:100%; padding:6px 0 0; }
-.grip i{ display:block; width:36px; height:5px; border-radius:99px; background:var(--outline-variant); margin:0 auto; }
 
 
 /* ============ Mini Player ============ */
@@ -776,7 +786,6 @@ html.theme-switching .blob-layer{ transition:opacity .45s var(--ease-std) !impor
 <!-- Player Dialog -->
 <div class="scrim" id="scrim"></div>
 <section class="dlg" id="dlg" role="dialog" aria-modal="true" aria-label="歌曲播放器">
-  <div class="grip"><i></i></div>
   <div class="dlg-inner">
     <div class="dlg-top">
       <span class="dlg-tag" id="dlgTag">Now Playing</span>
