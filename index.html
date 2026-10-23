@@ -706,7 +706,7 @@ html.theme-switching .blob-layer{ transition:opacity .45s var(--ease-std) !impor
           <div class="ph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg></div>
           <img id="coverImg" alt="专辑封面" draggable="false">
         </div>
-        <div class="dlg-status" id="dlgStatus"><span class="dot"></span><span id="dlgStatusText">正在解析播放地址…</span></div>
+        <div class="dlg-status" id="dlgStatus"><span class="dot"></span><span id="dlgStatusText">正在解析歌曲播放链接…</span></div>
         <h3 class="song-title" id="songTitle">—</h3>
         <span class="song-author">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
@@ -780,8 +780,8 @@ const api = (server,type,id) => `https://vercel-meting-api.musifei.org/api?serve
 
 /* ================= 收集库相关 =================
  * - 页面加载后立即静默拉取 list.txt，存入 musicdbList。
- * - 播放地址：先查收集库（命中即播），但给收集库 5 秒起播预算：
- *     超过 5 秒还没出声 → 中断到收集库的连接，自动改走在线源；
+ * - 播放地址：先查收集库（命中即播），但给收集库 6 秒起播预算：
+ *     超过 6 秒还没出声 → 中断到收集库的连接，自动改走在线源；
  *     在线源播放出任何问题 → 回退收集库（两个方向各只回退一次）。
  * - 封面 / 歌词：仍为在线优先、收集库兜底。
  * - 上报前先查 musicdbList，已收集的不上报。
@@ -799,11 +799,11 @@ const MUSICDB_ENABLED = true;
 const MUSICDB_TIMEOUT = 6000;       // 收集库单次请求超时：超时视为“未收录”，把播放交给音乐源
 
 /* ===== 播放源回退策略 =====
- * - 收集库：从点击起 5 秒内没能真正出声（info.json 查询 + 音频缓冲共用这份预算）
+ * - 收集库：从点击起 6 秒内没能真正出声（info.json 查询 + 音频缓冲共用这份预算）
  *           → 中断到收集库的连接，自动改走在线源；
  * - 在线源：解析失败 / 播放报错 / 起播超时 → 回退收集库；
  * - 每个方向只回退一次（state.collectionFallbackDone / state.onlineFallbackDone）。 */
-const COLLECTION_START_TIMEOUT = 5000;  // 收集库 5 秒内必须起播，否则切在线源
+const COLLECTION_START_TIMEOUT = 6000;  // 收集库 6 秒内必须起播，否则切在线源
 const ONLINE_START_TIMEOUT = 10000;     // 在线源起播超时，超过则回退收集库
 
 let musicdbList = new Set();        // 已收集集合：每项为【歌名-歌手】
@@ -929,7 +929,7 @@ async function getCollectionAudioUrl(song){
   try{ return (await getCollectionFileUrl(song, "audio")) || ""; }catch(_){ return ""; }
 }
 
-/* 带「5 秒预算」的收集库查询：
+/* 带「6 秒预算」的收集库查询：
  * info.json 查询与随后的音频缓冲共用同一份预算，先超预算就先认失败。
  * 被放弃的查询仍在后台继续（体积很小），结果会进缓存，供在线源失败后的回退直接命中。 */
 function getCollectionAudioUrlWithin(song, deadline){
@@ -1270,7 +1270,7 @@ let seeking=false;
 
 /* ================= 起播看门狗 & 播放源回退 =================
  * 规则（超时常量见文件上方的 COLLECTION_START_TIMEOUT / ONLINE_START_TIMEOUT）：
- *  - 收集库：从点击起 5 秒内没能真正出声 → 中断到收集库的连接，改走在线源；
+ *  - 收集库：从点击起 6 秒内没能真正出声 → 中断到收集库的连接，改走在线源；
  *  - 在线源：解析失败 / 播放报错 / 起播超时 → 回退收集库；
  *  - 两个方向各只回退一次（state.collectionFallbackDone / state.onlineFallbackDone），防来回死循环。
  */
@@ -1341,7 +1341,7 @@ function handleSourceFailure(reason){
   return true;
 }
 
-/* 收集库 5 秒没起播 → 中断连接改在线源；若收集库已是二次尝试，则放弃并跳曲 */
+/* 收集库 6 秒没起播 → 中断连接改在线源；若收集库已是二次尝试，则放弃并跳曲 */
 function onCollectionStartTimeout(token){
   if(token !== state.token || !state.playingFromCollection) return;
   if(mediaStarted()) return;                       // 已经出声（事件迟到 / 用户已暂停）→ 不换源
@@ -1356,7 +1356,7 @@ function onCollectionStartTimeout(token){
   state.collectionFallbackDone = true;
   stopAudio();                                  // 关键：中断到收集库的连接（含在途缓冲）
   dlgStatus.classList.remove("show");
-  snack("收集库 5 秒内未能起播，已回退到在线解析");
+  snack("收集库 6 秒内未能起播，已回退到在线解析");
   playAt(state.currentIndex, true, { fallback:true, skipCollection:true });
 }
 
@@ -1699,7 +1699,7 @@ async function playAt(index, auto=false, opts={}){
   }
   stopAudio();                                            // 中断上一首 / 上一个源的连接
 
-  /* 收集库「5 秒内必须起播」的总预算：从本次播放进入起算，包含 info.json 查询与音频缓冲 */
+  /* 收集库「6 秒内必须起播」的总预算：从本次播放进入起算，包含 info.json 查询与音频缓冲 */
   const collectionDeadline = Date.now() + COLLECTION_START_TIMEOUT;
 
   // Dynamic accent from cover (non-blocking, uses effective cover incl. collection fallback)
@@ -1718,7 +1718,7 @@ async function playAt(index, auto=false, opts={}){
   let fromCollection = false;
 
   /* ① 收集库优先：命中即播（info.json 结果已缓存，命中时通常无需等网络）
-   *    超过 5 秒预算即视为失败，不在这里干等 */
+   *    超过 6 秒预算即视为失败，不在这里干等 */
   if(!opts.skipCollection){
     dlgStatus.classList.add("show");
     dlgStatusText.textContent = "正在查询收集库…";
@@ -1729,7 +1729,7 @@ async function playAt(index, auto=false, opts={}){
       state.playingFromCollection = true;
       dlgTag.textContent += " · 收集库";
     }else{
-      if(url) state.collectionFallbackDone = true; // 查询本身就用完了 5 秒预算：算收集库失败
+      if(url) state.collectionFallbackDone = true; // 查询本身就用完了 6 秒预算：算收集库失败
       url = "";
     }
   }
