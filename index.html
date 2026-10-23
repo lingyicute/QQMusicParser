@@ -1327,7 +1327,7 @@ function handleSourceFailure(reason){
     state.collectionFallbackDone = true;
     stopAudio();
     dlgStatus.classList.remove("show");
-    snack("收集库播放异常（"+reason+"），已切换在线源");
+    snack("收集库播放异常（"+reason+"），已回退到在线解析");
     playAt(state.currentIndex, true, { fallback:true, skipCollection:true });
     return true;
   }
@@ -1356,7 +1356,7 @@ function onCollectionStartTimeout(token){
   state.collectionFallbackDone = true;
   stopAudio();                                  // 关键：中断到收集库的连接（含在途缓冲）
   dlgStatus.classList.remove("show");
-  snack("收集库 5 秒内未能起播，已自动切换在线源");
+  snack("收集库 5 秒内未能起播，已回退到在线解析");
   playAt(state.currentIndex, true, { fallback:true, skipCollection:true });
 }
 
@@ -1737,7 +1737,7 @@ async function playAt(index, auto=false, opts={}){
   /* ② 在线源：收集库未收录 / 超时 → 调用音乐源（JSONP 解析器） */
   if(!url && !opts.skipOnline){
     dlgStatus.classList.add("show");
-    dlgStatusText.textContent = opts.skipCollection ? "正在解析在线源播放地址…" : "收集库未收录，正在解析在线源…";
+    dlgStatusText.textContent = opts.skipCollection ? "正在解析歌曲播放链接…" : "收集库未收录，为你现场解析…";
     try{ url = await QQMusicResolver.getRealUrl(song.songmid); }catch(_){ url = ""; }
     if(token!==state.token) return;
   }
@@ -1748,7 +1748,7 @@ async function playAt(index, auto=false, opts={}){
     /* 在线源没解析到地址 → 若还没回退过收集库，再给收集库一次机会 */
     if(!opts.skipOnline && !state.onlineFallbackDone){
       state.onlineFallbackDone = true;
-      snack("在线源解析失败，回退收集库…");
+      snack("解析时出现问题，回退收集库…");
       playAt(index, true, { fallback:true, skipOnline:true });
       return;
     }
@@ -1762,12 +1762,12 @@ async function playAt(index, auto=false, opts={}){
   /* ③ 开始加载：按来源开启「必须起播」的看门狗（到点用 mediaStarted() 复核，真播过就不换源） */
   dlgStatus.classList.add("show");
   if(fromCollection){
-    dlgStatusText.textContent = "正在从收集库加载…（5 秒内未起播将自动切换在线源）";
+    dlgStatusText.textContent = "正在从收集库中取回歌曲…";
     startAudio(token, url);
     /* 用户主动暂停时不设起播期限：等他恢复播放时再由播放按钮重新计时 */
     if(!state.userPaused) armStartWatchdog(token, collectionDeadline - Date.now(), ()=>onCollectionStartTimeout(token));
   }else{
-    dlgStatusText.textContent = "正在加载在线源…（超时将回退收集库）";
+    dlgStatusText.textContent = "正在解析歌曲播放链接…";
     startAudio(token, url);
     if(!state.userPaused) armStartWatchdog(token, ONLINE_START_TIMEOUT, ()=>onOnlineStartTimeout(token));
   }
