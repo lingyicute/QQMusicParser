@@ -1121,12 +1121,13 @@ async function resolveLyrics(song, token){
   if(!song.lrc && song.songmid){
     try{
       const r = await fetchWithTimeout(api("tencent", "song", song.songmid), 10000);
+      if(!r.ok) throw 0;
       const arr = await r.json();
       if(!alive()) return;
       const s = Array.isArray(arr) && arr[0];
       if(s && s.lrc){
-        song.lrc = s.lrc;
-        if(await loadLyrics(s.lrc, token, true, song)) return;
+        song.lrc = String(s.lrc).replace(/^http:\/\//i, "https://");
+        if(await loadLyrics(song.lrc, token, true, song)) return;
       }
     }catch(_){ /* 在线失败则继续走兜底 */ }
   }
@@ -1161,7 +1162,7 @@ async function reportToCollector(song, fileUrl){
     const probe = new Audio();
     probe.preload = "metadata";
     let done = false;
-    const cleanup = ()=>{ try{ probe.src=""; probe.removeAttribute("src"); probe.load(); }catch(_){} };
+    const cleanup = ()=>{ try{ probe.onloadedmetadata=null; probe.onerror=null; probe.removeAttribute("src"); probe.load(); }catch(_){} };
     const timer = setTimeout(()=>{ if(!done){ done=true; cleanup(); } }, 20000);
     probe.onloadedmetadata = ()=>{
       if(done) return; done=true; clearTimeout(timer);
@@ -1188,7 +1189,8 @@ async function reportToCollector(song, fileUrl){
         body: JSON.stringify(payload),
         mode: "cors",
         keepalive: true
-      }).catch(()=>{ if(stem) reportedStems.delete(stem); /* 上报失败不打扰用户 */ });
+      }).then(r=>{ if(!r.ok && stem) reportedStems.delete(stem); })
+        .catch(()=>{ if(stem) reportedStems.delete(stem); /* 上报失败不打扰用户 */ });
     };
     probe.onerror = ()=>{ if(!done){ done=true; clearTimeout(timer); cleanup(); } };
     probe.src = fileUrl;
@@ -1275,12 +1277,15 @@ const QQMusicResolver = {
       const callbackName = 'jsonp_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
       const script = document.createElement('script');
       const fullUrl = url + (url.includes('?') ? '&' : '?') + 'callback=' + callbackName;
+      let settled = false;
       script.src = fullUrl;
-      window[callbackName] = (data) => { resolve(data); cleanup(true); };
-      script.onerror = () => { reject(new Error('JSONP 请求失败')); cleanup(true); };
-      const timeoutId = setTimeout(() => { reject(new Error('JSONP 请求超时')); cleanup(false); }, 5000);
+      window[callbackName] = (data) => { if (settled) return; settled = true; resolve(data); cleanup(true); };
+      script.onload = () => { if (!settled) { settled = true; reject(new Error('JSONP 响应无效')); cleanup(true); } };
+      script.onerror = () => { if (!settled) { settled = true; reject(new Error('JSONP 请求失败')); cleanup(true); } };
+      const timeoutId = setTimeout(() => { if (!settled) { settled = true; reject(new Error('JSONP 请求超时')); cleanup(false); } }, 5000);
       function cleanup(removeCb) {
         clearTimeout(timeoutId);
+        script.onload = script.onerror = null;
         if (script.parentNode) document.head.removeChild(script);
         if (removeCb) delete window[callbackName];
         else {
@@ -1342,9 +1347,10 @@ function extractSeedColor(url){
     const img = new Image();
     img.crossOrigin = "anonymous";
     let done=false;
-    const finish = v=>{ if(!done){ done=true; resolve(v); } };
+    const finish = v=>{ if(!done){ done=true; img.onload=img.onerror=null; resolve(v); } };
     const to = setTimeout(()=>finish(null), 3500);
     img.onload = ()=>{
+      if(done) return;
       try{
         const S=32, cv=document.createElement("canvas");
         cv.width=S; cv.height=S;
@@ -1368,7 +1374,7 @@ function extractSeedColor(url){
       }catch(_){ clearTimeout(to); finish(null); }
     };
     img.onerror = ()=>{ clearTimeout(to); finish(null); };
-    img.src = url.replace("R300x300","R150x150");
+    img.src = /gtimg\.cn\//.test(url) ? url.replace("R300x300","R150x150") : url;
   });
 }
 const dlg = $("#dlg");
@@ -1427,7 +1433,7 @@ function armStartWatchdog(token, ms, onTimeout){
 }
 
 /* 当前媒体加载尝试的守卫：同一次失败可能同时触发 error 与 play().catch，只回退一次 */
-let mediaGuard = { token:-1, done:true };
+let mediaGuard = { token:-1, done:true, started:false };
 
 /* 彻底停掉当前音频：暂停 + 清空 src + load()，立即中断正在进行的网络连接 */
 function stopAudio(){
@@ -1492,6 +1498,8 @@ function onCollectionStartTimeout(token){
     stopAudio();
     dlgStatus.classList.remove("show");
     setPlayUI("play");
+    markPlayingCard(false);
+    syncMini();
     skipOnCopyright("收集库音频加载超时，已跳过");
     return;
   }
@@ -1511,6 +1519,8 @@ function onOnlineStartTimeout(token){
     stopAudio();
     dlgStatus.classList.remove("show");
     setPlayUI("play");
+    markPlayingCard(false);
+    syncMini();
     skipOnCopyright("在线源加载超时，已跳过");
     return;
   }
@@ -1534,14 +1544,22 @@ function togglePlayback(){
     return;
   }
   if(audio.paused){
+    const t = state.token;
     state.userPaused = false;
-    audio.play().catch(()=>snack("播放失败，可能受版权保护"));
     /* 从「还没起播过」的状态恢复播放：重新挂上看门狗，仍然卡住就按原策略换源 */
     if(!mediaStarted()){
-      const t = state.token;
       if(state.playingFromCollection) armStartWatchdog(t, COLLECTION_START_TIMEOUT, ()=>onCollectionStartTimeout(t));
       else                            armStartWatchdog(t, ONLINE_START_TIMEOUT,    ()=>onOnlineStartTimeout(t));
     }
+    audio.play().catch(err=>{
+      if(t !== state.token) return;
+      clearStartWatchdog();
+      if(state.userPaused || (err && err.name === "AbortError")) return;
+      setPlayUI("play");
+      markPlayingCard(false);
+      syncMini();
+      snack("播放失败，可能受版权保护");
+    });
   }
   else { state.userPaused = true; clearStartWatchdog(); dlgStatus.classList.remove("show"); audio.pause(); }
 }
@@ -1571,8 +1589,13 @@ function replayCurrent(){
     return;
   }
   const t = state.token;
+  seeking = false;
   try{ audio.currentTime = 0; }catch(_){}
+  seekSlider.value=0; seekSlider.style.setProperty("--val","0%");
+  curTime.textContent="0:00";
+  syncLyrics(0);
   setPlayUI("pause");
+  syncMini();
   const p = audio.play();
   if(p && p.catch) p.catch(()=>{ if(t===state.token && !state.userPaused && state.currentIndex>=0) playAt(state.currentIndex); });
 }
@@ -1592,6 +1615,7 @@ audio.addEventListener("ended", ()=>{
   if(!activeMedia()) return;
   if(state.mode==="one"){ replayCurrent(); return; }
   if(state.mode==="once"){
+    seeking=false;
     audio.pause();
     try{ audio.currentTime = 0; }catch(_){}
     seekSlider.value=0; seekSlider.style.setProperty("--val","0%");
@@ -1680,10 +1704,12 @@ function renderLyricsSkeleton(){
   lyricLines=[]; lyricEls=[]; curLine=-1;
   lyrEmpty.style.display="none";
   lyricsScroll.innerHTML='<div class="lyr-skel">'+'<i></i>'.repeat(7)+'</div>';
+  lyricsScroll.scrollTop=0;
 }
 function renderLyrics(lines){
   lyricLines=lines; curLine=-1;
   lyricsScroll.innerHTML="";
+  lyricsScroll.scrollTop=0;
   if(!lines.length){
     lyrEmptyText.textContent = "纯音乐 · 请欣赏 / 暂无歌词";
     lyrEmpty.style.display="flex";
@@ -1696,7 +1722,8 @@ function renderLyrics(lines){
     p.className="line"; p.textContent=l.txt;
     p.addEventListener("click", ()=>{
       if(!audio.src) return;
-      audio.currentTime=l.t+.01;
+      try{ audio.currentTime=l.t+.01; }catch(_){}
+      syncLyrics(l.t+.01);
       if(audio.paused) togglePlayback();
     });
     lyricsScroll.appendChild(p);
@@ -1945,9 +1972,11 @@ async function setCover(song, token){
     if(!fellBack && song.pic && pic===song.pic){
       fellBack = true;
       const colPic = await getCollectionFileUrl(song, "cover");
-      if(token===state.songToken && colPic){ pic=colPic; img.src=colPic; return; }
+      if(token!==state.songToken) return;
+      if(colPic && colPic!==pic){ pic=colPic; img.src=colPic; return; }
     }
     coverImg.style.display="none"; coverPh.style.display="grid"; coverBox.classList.remove("loading");
+    if(miniOn) syncMini();
   };
   img.src=pic;
 }
@@ -1986,6 +2015,7 @@ async function playAt(index, auto=false, opts={}){
   setPlayUI("loading");
   dlgStatus.classList.remove("show");
   state.playingFromCollection = false;                    // 每次尝试重新判定播放来源
+  stopAudio();                                            // 先中断上一首 / 上一个源的连接，避免 syncMini / 歌词读取到旧状态
   if(!opts.fallback){                                     // 只有新的一次播放才重置回退记录与封面/歌词（回退时保留，防闪烁与死循环）
     const songToken = ++state.songToken;
     state.collectionFallbackDone = false;
@@ -1997,7 +2027,6 @@ async function playAt(index, auto=false, opts={}){
   }else if(miniOn){
     syncMini();
   }
-  stopAudio();                                            // 中断上一首 / 上一个源的连接
 
   /* 收集库「6 秒内必须起播」的总预算：从本次播放进入起算，包含 info.json 查询与音频缓冲 */
   const collectionDeadline = Date.now() + COLLECTION_START_TIMEOUT;
@@ -2018,7 +2047,7 @@ async function playAt(index, auto=false, opts={}){
       state.playingFromCollection = true;
       dlgTag.textContent += " · 收集库";
     }else{
-      if(colUrl === "" || colUrl) state.collectionFallbackDone = true; // 已确认未收录或查询本身耗尽预算：后续不再回退收集库
+      if(colUrl === "") state.collectionFallbackDone = true; // 已确认未收录：后续不再回退收集库
       url = "";
     }
   }
@@ -2041,6 +2070,8 @@ async function playAt(index, auto=false, opts={}){
       playAt(index, true, { fallback:true, skipOnline:true });
       return;
     }
+    markPlayingCard(false);
+    syncMini();
     skipOnCopyright("该歌曲因版权 / 付费限制暂时无法播放");
     return;
   }
@@ -2064,18 +2095,23 @@ async function playAt(index, auto=false, opts={}){
     /* 用户在上一个源加载途中按了暂停：换源但不自动续播，等他点播放 */
     dlgStatus.classList.remove("show");
     setPlayUI("play");
+    syncMini();
   }else{
     setPlayUI("loading");
     audio.play().then(()=>{
-      if(token!==state.token) return;
+      if(token!==state.token || !activeMedia()) return;
       state.skipCount = 0;
+      setPlayUI("pause");
       markPlayingCard(true);
+      syncMini();
     }).catch((err)=>{
-      if(token!==state.token) return;
+      if(token!==state.token || mediaGuard.token!==token || mediaGuard.done) return;
       if(state.userPaused || (err && err.name === "AbortError")){
         clearStartWatchdog();
         dlgStatus.classList.remove("show");
         setPlayUI("play");
+        markPlayingCard(false);
+        syncMini();
         return;
       }
       setPlayUI("play");
@@ -2085,6 +2121,8 @@ async function playAt(index, auto=false, opts={}){
         clearStartWatchdog();
         dlgStatus.classList.remove("show");
         state.userPaused = true;
+        markPlayingCard(false);
+        syncMini();
         snack("浏览器拦截了自动播放，请点击播放按钮");
         return;
       }
@@ -2189,8 +2227,10 @@ async function loadPlaylist(id){
       const song = s && typeof s === "object" ? s : {};
       const mid = song.songmid || song.id || (/[?&]id=([^&]+)/.exec(song.lrc || song.url || "") || [])[1] || "";
       return Object.assign({}, song, {
+        title: String(song.title || song.name || "").trim(),
         author: normalizeSinger(song.author || song.singer),
         pic: String(song.pic || "").replace(/^http:\/\//i, "https://"),
+        lrc: String(song.lrc || "").replace(/^http:\/\//i, "https://"),
         songmid: String(mid),
         url: ""
       });
@@ -2239,6 +2279,7 @@ $("#filterInput").addEventListener("input", e=>{
   let shown=0;
   document.querySelectorAll(".card[data-key]").forEach(c=>{
     const hit = !q || c.dataset.key.includes(q);
+    c.style.animationDelay = "0ms";
     c.style.display = hit ? "" : "none";
     if(hit) shown++;
   });
