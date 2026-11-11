@@ -1026,28 +1026,43 @@ async function getCollectionInfo(song){
     if(cached.expiresAt > Date.now()) return cached.promise;
     musicdbInfoCache.delete(stem);
   }
-  /* 失败结果由 MUSICDB_NEGATIVE_TTL（30 秒负缓存）处理 */
+  /* 确定性未收录（404 等）由 MUSICDB_NEGATIVE_TTL（30 秒负缓存）处理；
+     超时 / 网络异常 / 5xx 等瞬时失败立即清缓存，避免回退收集库时命中假空结果 */
+  let entry;
   const task = (async ()=>{
     try{
       const r = await fetchMusicdb("/" + encodeURIComponent(stem) + "/info.json");
       if(r.ok){
         const j = await r.json();
         if(j && j.files && j.files.audio) return j;
+      }else if(r.status !== 404){
+        if(entry) entry.transient = true;
       }
-    }catch(_){ /* 无此歌 / 超时 / 网络失败 */ }
+    }catch(_){
+      if(entry) entry.transient = true; /* 超时 / 网络失败 */
+    }
     return null;
   })();
-  const entry = { promise: task, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
+  entry = { promise: task, expiresAt: Date.now() + 24 * 60 * 60 * 1000, transient: false };
   musicdbInfoCache.set(stem, entry);
-  task.then(value=>{ if(!value && musicdbInfoCache.get(stem) === entry) entry.expiresAt = Date.now() + MUSICDB_NEGATIVE_TTL; }, ()=>{
-    if(musicdbInfoCache.get(stem) === entry) entry.expiresAt = Date.now() + MUSICDB_NEGATIVE_TTL;
+  task.then(value=>{
+    if(value || musicdbInfoCache.get(stem) !== entry) return;
+    if(entry.transient) musicdbInfoCache.delete(stem);
+    else entry.expiresAt = Date.now() + MUSICDB_NEGATIVE_TTL;
+  }, ()=>{
+    if(musicdbInfoCache.get(stem) === entry) musicdbInfoCache.delete(stem);
   });
   return task;
 }
 
-/* 收集库优先取播放地址：命中返回直链，未收录 / 超时 / 异常统一返回 "" */
+/* 收集库优先取播放地址：命中返回直链，确定未收录返回 ""，瞬时失败/超时返回 null */
 async function getCollectionAudioUrl(song){
-  try{ return (await getCollectionFileUrl(song, "audio")) || ""; }catch(_){ return ""; }
+  if(!MUSICDB_ENABLED) return "";
+  try{
+    const u = await getCollectionFileUrl(song, "audio");
+    if(u) return u;
+    return musicdbInfoCache.has(collectionStem(song)) ? "" : null;
+  }catch(_){ return null; }
 }
 
 /* 带「6 秒预算」的收集库查询：
@@ -1428,8 +1443,7 @@ function clearStartWatchdog(){
 function armStartWatchdog(token, ms, onTimeout){
   clearStartWatchdog();
   const fire = ()=>{ startWatchdog = 0; if(token === state.token) onTimeout(); };
-  if(ms <= 0){ fire(); return; }
-  startWatchdog = setTimeout(fire, ms);
+  startWatchdog = setTimeout(fire, Math.max(0, ms));
 }
 
 /* 当前媒体加载尝试的守卫：同一次失败可能同时触发 error 与 play().catch，只回退一次 */
