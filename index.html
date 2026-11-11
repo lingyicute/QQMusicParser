@@ -1570,6 +1570,8 @@ function togglePlayback(){
       clearStartWatchdog();
       if(state.userPaused || (err && err.name === "AbortError")) return;
       setPlayUI("play");
+      if(!mediaStarted() && handleSourceFailure("播放请求被拒绝")) return;
+      dlgStatus.classList.remove("show");
       markPlayingCard(false);
       syncMini();
       snack("播放失败，可能受版权保护");
@@ -1580,7 +1582,11 @@ function togglePlayback(){
 playBtn.addEventListener("click", togglePlayback);
 function activeMedia(){ return !!audio.src && mediaGuard.token === state.token && !mediaGuard.done; }
 audio.addEventListener("play",  ()=>{ if(!activeMedia()) return; state.userPaused = false; setPlayUI("pause"); markPlayingCard(true); syncMini(); });
-audio.addEventListener("pause", ()=>{ if(!activeMedia()) return; setPlayUI("play");  markPlayingCard(false); syncMini(); });
+audio.addEventListener("pause", ()=>{
+  if(!activeMedia()) return;
+  if(!audio.ended){ state.userPaused = true; clearStartWatchdog(); dlgStatus.classList.remove("show"); }
+  setPlayUI("play"); markPlayingCard(false); syncMini();
+});
 /* 真正出声：隐藏状态条。看门狗不在这里撤销 —— 迟到的 playing 可能来自上一个源，
  * 统一由看门狗到点时用 mediaStarted() 复核，避免看门狗被误清后卡死。 */
 audio.addEventListener("playing", ()=>{ if(!activeMedia()) return; dlgStatus.classList.remove("show"); });
@@ -1609,8 +1615,9 @@ function replayCurrent(){
   curTime.textContent="0:00";
   syncLyrics(0);
   setPlayUI("pause");
-  syncMini();
   const p = audio.play();
+  markPlayingCard(true);
+  syncMini();
   if(p && p.catch) p.catch(()=>{ if(t===state.token && !state.userPaused && state.currentIndex>=0) playAt(state.currentIndex); });
 }
 /* 版权受限处理：列表循环模式下自动跳到下一首，并防止整张歌单都无法播放时的死循环 */
@@ -1663,8 +1670,13 @@ seekSlider.addEventListener("input", ()=>{
   if(isFinite(audio.duration)) curTime.textContent = fmtTime(seekSlider.value/1000*audio.duration);
 });
 seekSlider.addEventListener("change", ()=>{
-  if(isFinite(audio.duration) && audio.duration>0) audio.currentTime = seekSlider.value/1000*audio.duration;
-  else { seekSlider.value=0; seekSlider.style.setProperty("--val","0%"); curTime.textContent="0:00"; }
+  if(isFinite(audio.duration) && audio.duration>0){
+    const target = seekSlider.value/1000*audio.duration;
+    try{ audio.currentTime = target; }catch(_){}
+    curTime.textContent = fmtTime(target);
+    syncLyrics(target);
+    syncMiniProgress();
+  }else { seekSlider.value=0; seekSlider.style.setProperty("--val","0%"); curTime.textContent="0:00"; }
   seeking=false;
 });
 volSlider.addEventListener("input", ()=>{
