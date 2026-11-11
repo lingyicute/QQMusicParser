@@ -376,24 +376,24 @@ html[data-theme="dark"] .blob-layer-dark { opacity:var(--blob-op-dark); }
 /* ============ Dialog / Player ============ */
 .scrim{
   position:fixed; inset:0; background:var(--scrim); z-index:60;
-  opacity:0; pointer-events:none; transition:opacity .4s var(--ease-std);
+  opacity:0; visibility:hidden; pointer-events:none; transition:opacity .4s var(--ease-std), visibility .4s;
   backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
 }
-.scrim.open{ opacity:1; pointer-events:auto; }
+.scrim.open{ opacity:1; visibility:visible; pointer-events:auto; }
 .dlg{
   position:fixed; z-index:61; left:50%; top:50%;
   width:min(920px, calc(100vw - 32px)); max-height:min(920px, calc(100dvh - 40px));
-  transform:translate(-50%,-50%) scale(.9) translateY(30px); opacity:0; pointer-events:none;
+  transform:translate(-50%,-50%) scale(.9) translateY(30px); opacity:0; visibility:hidden; pointer-events:none;
   background:
     radial-gradient(120% 90% at 12% 0%, color-mix(in srgb, var(--dpc, var(--primary-container)) 34%, transparent), transparent 60%),
     var(--surface-container-high);
   border-radius:var(--r-xl);
   box-shadow:var(--shadow-3);
-  transition:transform .48s var(--ease-emph), opacity .35s;
+  transition:transform .48s var(--ease-emph), opacity .35s, visibility .48s;
   display:flex; flex-direction:column; overflow:hidden;
   border:1px solid color-mix(in srgb, var(--outline-variant) 40%, transparent);
 }
-.dlg.open{ transform:translate(-50%,-50%) scale(1) translateY(0); opacity:1; pointer-events:auto; }
+.dlg.open{ transform:translate(-50%,-50%) scale(1) translateY(0); opacity:1; visibility:visible; pointer-events:auto; }
 /* 内部高度分配：桌面端靠弹性布局吃掉多余高度，永远不出现滚动条；
    只有移动端（底栏形态）才让 .dlg-inner 滚动，见文件末尾的媒体查询。
    之前是 .dlg-inner 无条件 overflow-y:auto + 歌词区固定 45vh，
@@ -1140,9 +1140,10 @@ async function resolveLyrics(song, token){
       const arr = await r.json();
       if(!alive()) return;
       const s = Array.isArray(arr) && arr[0];
-      if(s && s.lrc){
-        song.lrc = String(s.lrc).replace(/^http:\/\//i, "https://");
-        if(await loadLyrics(song.lrc, token, true, song)) return;
+      const lrcUrl = s && s.lrc ? String(s.lrc).replace(/^http:\/\//i, "https://") : "";
+      if(lrcUrl && await loadLyrics(lrcUrl, token, true, song)){
+        song.lrc = lrcUrl;
+        return;
       }
     }catch(_){ /* 在线失败则继续走兜底 */ }
   }
@@ -1900,7 +1901,7 @@ document.addEventListener("keydown", e=>{
     minimizeDialog();                       // Esc = 最小化
     return;
   }
-  if((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "c" || e.key === "C")){
+  if((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "c" || e.key === "C")){
     if(!dlgOpen && !miniOn) return;         // 播放器未运行：走系统复制
     const el = e.target;
     if(el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName || ""))) return;
