@@ -1141,12 +1141,17 @@ const COLLECTOR_ENABLED = true;
 const COLLECTOR_MIN_DURATION = 60; // 歌曲长度
 
 /* 后台探测歌曲实际时长，满足条件则上报收集器（不阻塞播放，失败静默丢弃） */
+const reportedStems = new Set();
 async function reportToCollector(song, fileUrl){
   if(!COLLECTOR_ENABLED || !COLLECTOR_URL || COLLECTOR_URL.includes("YOUR_ACCOUNT")) return;
   if(!song || !fileUrl || !/^https?:\/\//i.test(fileUrl)) return;
-  // 前端去重：已在收集库中的不上报（Worker 端也有一次检查）
+  // 前端去重：已在收集库中或本会话已上报的不重复上报（Worker 端也有一次检查）
   await musicdbReady;
-  try{ if(MUSICDB_ENABLED && musicdbList.has(collectionStem(song))) return; }catch(_){}
+  let stem = "";
+  try{
+    stem = collectionStem(song);
+    if((MUSICDB_ENABLED && musicdbList.has(stem)) || reportedStems.has(stem)) return;
+  }catch(_){}
   try{
     const probe = new Audio();
     probe.preload = "metadata";
@@ -1158,6 +1163,7 @@ async function reportToCollector(song, fileUrl){
       const dur = probe.duration;
       cleanup();
       if(!isFinite(dur) || dur <= COLLECTOR_MIN_DURATION) return; // ≤60 秒不上报
+      if(stem && reportedStems.has(stem)) return;
       // 在上报时刻再读取 song.lrc，保证拿到 song API 刷新后的最新歌词 url
       const payload = {
         title:  song.title  || "",
@@ -1170,13 +1176,14 @@ async function reportToCollector(song, fileUrl){
         duration: Math.round(dur)
       };
       if(!payload.title || !payload.author || !payload.url) return;
+      if(stem) reportedStems.add(stem);
       fetch(COLLECTOR_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         mode: "cors",
         keepalive: true
-      }).catch(()=>{ /* 上报失败不打扰用户 */ });
+      }).catch(()=>{ if(stem) reportedStems.delete(stem); /* 上报失败不打扰用户 */ });
     };
     probe.onerror = ()=>{ if(!done){ done=true; clearTimeout(timer); cleanup(); } };
     probe.src = fileUrl;
@@ -1214,18 +1221,23 @@ function applyTheme(t){
     );
   }catch(_){}
 }
+function getSavedTheme(){
+  try{
+    const v = localStorage.getItem("qmp-theme");
+    return (v === "dark" || v === "light") ? v : null;
+  }catch(_){ return null; }
+}
 (function initTheme(){
-  const saved = localStorage.getItem("qmp-theme");
-  const t = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const t = getSavedTheme() || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   applyTheme(t);
 })();
 themeBtn.addEventListener("click", ()=>{
   const next = currentTheme()==="dark" ? "light" : "dark";
-  localStorage.setItem("qmp-theme", next);
+  try{ localStorage.setItem("qmp-theme", next); }catch(_){}
   applyTheme(next);
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", e=>{
-  if(!localStorage.getItem("qmp-theme")) applyTheme(e.matches ? "dark" : "light");
+  if(!getSavedTheme()) applyTheme(e.matches ? "dark" : "light");
 });
 
 /* ================= Ripple ================= */
@@ -1259,18 +1271,20 @@ const QQMusicResolver = {
       const script = document.createElement('script');
       const fullUrl = url + (url.includes('?') ? '&' : '?') + 'callback=' + callbackName;
       script.src = fullUrl;
-      window[callbackName] = (data) => { resolve(data); cleanup(); };
-      script.onerror = () => { reject(new Error('JSONP 请求失败')); cleanup(); };
-      const timeoutId = setTimeout(() => { reject(new Error('JSONP 请求超时')); cleanup(); }, 5000);
-      function cleanup() {
+      window[callbackName] = (data) => { resolve(data); cleanup(true); };
+      script.onerror = () => { reject(new Error('JSONP 请求失败')); cleanup(true); };
+      const timeoutId = setTimeout(() => { reject(new Error('JSONP 请求超时')); cleanup(false); }, 5000);
+      function cleanup(removeCb) {
         clearTimeout(timeoutId);
         if (script.parentNode) document.head.removeChild(script);
-        delete window[callbackName];
+        if (removeCb) delete window[callbackName];
+        else window[callbackName] = () => { delete window[callbackName]; };
       }
       document.head.appendChild(script);
     });
   },
   async getRealUrl(songmid) {
+    if (!songmid) return "";
     const guid = (10000000 * Math.random()).toFixed(0);
     const dataObj = {
       req_0: { module: "vkey.GetVkeyServer", method: "CgiGetVkey",
@@ -1285,12 +1299,13 @@ const QQMusicResolver = {
     const reqUrl = 'https://u.y.qq.com/cgi-bin/musicu.fcg?' + params.toString();
     try {
       const res = await this.jsonp(reqUrl);
-      if (res && res.req_0 && res.req_0.data && res.req_0.data.midurlinfo) {
-        const purl = res.req_0.data.midurlinfo[0].purl;
-        if (!purl) return "";
-        const sipArray = res.req_0.data.sip;
-        const sip = sipArray.find(t => !t.startsWith("http://ws")) || sipArray[0];
-        return `${sip}${purl}`.replace("http://", "https://");
+      const data = res && res.req_0 && res.req_0.data;
+      const info = data && Array.isArray(data.midurlinfo) && data.midurlinfo[0];
+      if (info && info.purl) {
+        const sipArray = Array.isArray(data.sip) ? data.sip : [];
+        const sip = sipArray.find(t => t && !t.startsWith("http://ws")) || sipArray[0];
+        if (!sip) return "";
+        return `${sip}${info.purl}`.replace(/^http:\/\//i, "https://");
       }
       return "";
     } catch (err) { console.error("解析 QQ 音乐链接失败:", err); return ""; }
@@ -2058,7 +2073,7 @@ $("#nextBtn").addEventListener("click", ()=>{
 /* ================= Playlist ================= */
 const grid=$("#grid"), secHead=$("#secHead"), secTitle=$("#secTitle"), secSub=$("#secSub"),
       hero=$("#hero"), linearProg=$("#linearProg"), stateMsg=$("#stateMsg"),
-      plInput=$("#plInput"), searchbar=$(".searchbar");
+      plInput=$("#plInput"), filterInput=$("#filterInput"), searchbar=$(".searchbar");
 
 function skeletons(n=10){
   grid.innerHTML="";
@@ -2109,6 +2124,10 @@ function renderSongs(){
 let plToken=0;
 async function loadPlaylist(id){
   const token=++plToken;
+  prefetchToken++;
+  if(dlgOpen || miniOn || state.currentIndex>=0) closeDialog();
+  state.songs=[];
+  if(filterInput) filterInput.value="";
   hideState();
   grid.innerHTML="";
   secHead.classList.remove("show");
@@ -2131,7 +2150,11 @@ async function loadPlaylist(id){
     // 与 163 Parser 一致：合作歌手统一成 "歌手 A / 歌手 B"，保证 stem 与曲库身份稳定。
     state.songs = data.map(s => {
       const song = s && typeof s === "object" ? s : {};
-      return Object.assign({}, song, { author: normalizeSinger(song.author || song.singer) });
+      const mid = song.songmid || (/[?&]id=([^&]+)/.exec(song.lrc || "") || [])[1] || "";
+      return Object.assign({}, song, {
+        author: normalizeSinger(song.author || song.singer),
+        songmid: String(mid)
+      });
     });
     renderSongs();
     prefetchCollectionInfo(); // 后台预取收集库信息，保证「收集库优先」不引入点击等待
