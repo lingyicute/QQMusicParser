@@ -1904,6 +1904,7 @@ function closeDialog(){
   coverPh.style.display="grid";
   coverBox.classList.remove("loading");
   markPlayingCard(false); state.currentIndex=-1;
+  syncMediaSession();
   clearDynamicPalette();
   document.title = "QQ Music Playlist Parser by lingyicute";
 }
@@ -1951,6 +1952,7 @@ function syncMiniProgress(){
   miniProgEl.style.width = pct + "%";
 }
 function syncMini(){
+  syncMediaSession();               // 系统媒体控件不受迷你播放器开关影响，始终同步
   if(!miniOn) return;
   const song = state.currentIndex >= 0 ? state.songs[state.currentIndex] : null;
   const t = (song && song.title) || "未知曲目";
@@ -2004,7 +2006,7 @@ async function setCover(song, token){
   coverImg.removeAttribute("src");
   coverImg.style.display="none";
   coverPh.style.display="grid";
-  if(miniOn) syncMini();
+  syncMini();
   let pic = await resolveCoverUrl(song); // 在线优先，缺失时用收集库
   if(token!==state.songToken) return;
   if(!pic){ coverBox.classList.remove("loading"); return; }
@@ -2014,7 +2016,7 @@ async function setCover(song, token){
     if(token!==state.songToken) return;
     coverImg.src=pic; coverImg.style.display="block";
     coverPh.style.display="none"; coverBox.classList.remove("loading");
-    if(miniOn) syncMini();
+    syncMini();
   };
   img.onerror= async ()=>{
     if(token!==state.songToken) return;
@@ -2026,7 +2028,7 @@ async function setCover(song, token){
       if(colPic && colPic!==pic){ pic=colPic; img.src=colPic; return; }
     }
     coverImg.style.display="none"; coverPh.style.display="grid"; coverBox.classList.remove("loading");
-    if(miniOn) syncMini();
+    syncMini();
   };
   img.src=pic;
 }
@@ -2194,6 +2196,58 @@ $("#nextBtn").addEventListener("click", ()=>{
   if(!state.songs.length) return;
   playAt((state.currentIndex+1)%state.songs.length);
 });
+
+/* ================= Media Session =================
+ * 接入系统媒体控件（锁屏 / 通知栏 / 耳机线控 / 键盘媒体键）：同步曲目信息、封面与播放状态，
+ * 并把播放 / 暂停 / 上一首 / 下一首 / 拖动进度 / 停止接到播放器上。不支持的环境静默跳过。 */
+const mediaSession = ("mediaSession" in navigator) ? navigator.mediaSession : null;
+let mediaSessionKey = "";
+function syncMediaSession(){
+  if(!mediaSession) return;
+  try{
+    const song = state.currentIndex >= 0 ? state.songs[state.currentIndex] : null;
+    if(!song){
+      if(mediaSessionKey){ mediaSessionKey = ""; mediaSession.metadata = null; }
+      mediaSession.playbackState = "none";
+      return;
+    }
+    const pic = coverImg.getAttribute("src") || "";
+    const key = [state.currentIndex, song.title, song.author, pic].join("\n");
+    if(key !== mediaSessionKey && typeof MediaMetadata === "function"){
+      mediaSessionKey = key;
+      mediaSession.metadata = new MediaMetadata({
+        title: song.title || "未知曲目",
+        artist: song.author || "",
+        album: song.album || "",
+        artwork: pic ? [{ src: pic }] : []
+      });
+    }
+    mediaSession.playbackState = audio.src && !audio.paused ? "playing" : "paused";
+    const d = audio.duration;
+    if(mediaSession.setPositionState && activeMedia() && isFinite(d) && d > 0){
+      mediaSession.setPositionState({ duration: d, playbackRate: audio.playbackRate || 1,
+                                      position: clamp(audio.currentTime, 0, d) });
+    }
+  }catch(_){ /* 个别浏览器对 artwork / position 校验严格，失败不影响播放 */ }
+}
+audio.addEventListener("seeked", ()=>{ if(activeMedia()) syncMediaSession(); });
+if(mediaSession){
+  const setAction = (action, fn)=>{ try{ mediaSession.setActionHandler(action, fn); }catch(_){ /* 不支持的动作 */ } };
+  setAction("play",  ()=>{ if(state.currentIndex >= 0 && (!audio.src || audio.paused)) togglePlayback(); });
+  setAction("pause", ()=>{ if(audio.src && !audio.paused) togglePlayback(); });
+  /* 播放器未运行时不响应切歌键，避免在没有任何界面的情况下“偷偷”开始播放 */
+  setAction("previoustrack", ()=>{ if(state.currentIndex >= 0) $("#prevBtn").click(); });
+  setAction("nexttrack",     ()=>{ if(state.currentIndex >= 0) $("#nextBtn").click(); });
+  setAction("seekto", d=>{
+    if(!activeMedia() || !d || !isFinite(d.seekTime) || !isFinite(audio.duration)) return;
+    const t = clamp(d.seekTime, 0, audio.duration);
+    try{ audio.currentTime = t; }catch(_){}
+    curTime.textContent = fmtTime(t);
+    syncLyrics(t);
+    syncMiniProgress();
+  });
+  setAction("stop", ()=>{ if(state.currentIndex >= 0) closeDialog(); });
+}
 
 /* ================= Playlist ================= */
 const grid=$("#grid"), secHead=$("#secHead"), secTitle=$("#secTitle"), secSub=$("#secSub"),
