@@ -1695,10 +1695,26 @@ volSlider.addEventListener("input", ()=>{
   audio.muted = volSlider.value==="0";
   syncVolIcon();
 });
-volSlider.style.setProperty("--val","80%");
+/* 音量记忆：刷新 / 下次打开沿用上次的音量。0 不记忆，避免下次打开“没声音”却找不到原因 */
+const VOLUME_KEY = "qmp-volume";
+function saveVolume(){
+  const v = Math.round(audio.volume * 100);
+  if(v > 0) try{ localStorage.setItem(VOLUME_KEY, String(v)); }catch(_){}
+}
+(function initVolume(){
+  let v = 80;
+  try{
+    const saved = localStorage.getItem(VOLUME_KEY);
+    if(saved && /^\d{1,3}$/.test(saved) && +saved > 0) v = Math.min(100, +saved);
+  }catch(_){}
+  audio.volume = v / 100;
+  volSlider.value = v;
+  volSlider.style.setProperty("--val", v + "%");
+})();
+volSlider.addEventListener("change", saveVolume);   // 拖动结束再写入，避免每帧写 localStorage
 volBtn.addEventListener("click", ()=>{
   audio.muted = !audio.muted;
-  if(!audio.muted && audio.volume===0){ audio.volume=.5; volSlider.value=50; volSlider.style.setProperty("--val","50%"); }
+  if(!audio.muted && audio.volume===0){ audio.volume=.5; volSlider.value=50; volSlider.style.setProperty("--val","50%"); saveVolume(); }
   syncVolIcon();
 });
 function syncVolIcon(){
