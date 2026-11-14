@@ -1328,7 +1328,8 @@ const QQMusicResolver = {
       const info = data && Array.isArray(data.midurlinfo) && data.midurlinfo[0];
       if (info && info.purl) {
         const sipArray = Array.isArray(data.sip) ? data.sip : [];
-        const sip = sipArray.find(t => t && !t.startsWith("http://ws")) || sipArray[0];
+        const sip = sipArray.find(t => typeof t === "string" && t && !t.startsWith("http://ws"))
+                 || sipArray.find(t => typeof t === "string" && t);
         if (!sip) return "";
         return `${sip}${info.purl}`.replace(/^http:\/\//i, "https://");
       }
@@ -1567,9 +1568,21 @@ function togglePlayback(){
       clearStartWatchdog();
       if(state.userPaused || (err && err.name === "AbortError")) return;
       setPlayUI("play");
-      if(!mediaStarted() && handleSourceFailure("播放请求被拒绝")) return;
       dlgStatus.classList.remove("show");
       markPlayingCard(false);
+      /* 播放被浏览器拦截（如系统媒体键 / 失去用户激活）不是播放源的问题：不换源，等用户再点 */
+      if(err && err.name === "NotAllowedError"){
+        state.userPaused = true;
+        syncMini();
+        snack("浏览器拦截了播放，请点击播放按钮");
+        return;
+      }
+      if(!mediaStarted()){
+        if(handleSourceFailure("播放请求被拒绝")) return;
+        /* handleSourceFailure 已把本次尝试标记为结束：残留的 src 会让之后的播放 / 进度事件全被
+           activeMedia() 忽略（界面失联）。清掉它，下次点播放走完整的重新解析 */
+        stopAudio();
+      }
       syncMini();
       snack("播放失败，可能受版权保护");
     });
@@ -1848,19 +1861,34 @@ modeBtn.addEventListener("click", ()=>{
 const scrim=$("#scrim"), coverBox=$("#coverBox"), coverImg=$("#coverImg"),
       songTitle=$("#songTitle"), songAuthor=$("#songAuthor"), midNote=$("#midNote"), dlgTag=$("#dlgTag");
 let dlgOpen=false;
+let dlgReturnFocus=null;            // 打开播放窗口前的焦点（通常是被点的卡片），关闭后归还
 
 function openDialog(){
+  if(!dlgOpen){
+    const ae = document.activeElement;
+    if(ae && ae !== document.body && !dlg.contains(ae) && !miniEl.contains(ae)) dlgReturnFocus = ae;
+  }
   dlgOpen=true;
   scrim.classList.add("open");
   dlg.classList.add("open");
   document.body.style.overflow="hidden";
   hideMini();                       // 回到大播放窗口：收起迷你控件
+  /* 焦点移入对话框：否则键盘焦点仍停在遮罩下的卡片 / 已隐藏的迷你播放器上 */
+  if(!dlg.contains(document.activeElement)){ try{ playBtn.focus({ preventScroll:true }); }catch(_){} }
+}
+/* 对话框 / 迷你播放器隐藏后（visibility:hidden）其中的焦点会丢到 <body>，键盘用户失去位置 */
+function returnFocus(target){
+  const ae = document.activeElement;
+  if(!ae || !(dlg.contains(ae) || miniEl.contains(ae))) return;   // 焦点不在播放器里：不抢焦点
+  if(target && target.isConnected){ try{ target.focus({ preventScroll:true }); }catch(_){} }
+  if(document.activeElement === ae) try{ ae.blur(); }catch(_){}
 }
 function closeDialog(){
   dlgOpen=false;
   scrim.classList.remove("open");
   dlg.classList.remove("open");
   document.body.style.overflow="";
+  returnFocus(dlgReturnFocus); dlgReturnFocus=null;
   hideMini();                       // 关闭 = 停止播放，迷你控件一并收起
 
   clearStartWatchdog();
@@ -1954,6 +1982,7 @@ function minimizeDialog(){
   dlg.classList.remove("open");
   document.body.style.overflow = "";
   showMini();                       // 迷你控件本身就是反馈，不再弹提示
+  if(dlg.contains(document.activeElement)) returnFocus(miniBody);
 }
 
 $("#minBtn").addEventListener("click", minimizeDialog);
@@ -2212,7 +2241,16 @@ function renderSongs(){
     if(s.pic){ img.src=s.pic; img.onerror=()=>img.remove(); } else img.remove();
     c.querySelector(".tt").textContent = s.title || "未知曲目";
     c.querySelector(".a").textContent = s.author || "未知歌手";
-    c.addEventListener("click", ()=>{ openDialog(); playAt(i); });
+    c.addEventListener("click", ()=>{
+      openDialog();
+      /* 点的就是当前曲目（如最小化后从列表点回来）：只回到播放窗口，暂停中则继续播放，
+         不再从头重新解析加载 */
+      if(i === state.currentIndex && (activeMedia() || spin.style.display !== "none")){
+        if(activeMedia() && audio.paused) togglePlayback();
+        return;
+      }
+      playAt(i);
+    });
     grid.appendChild(c);
   });
 }
