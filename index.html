@@ -1713,8 +1713,11 @@ let lyricLines=[], lyricEls=[], curLine=-1;
 
 function parseLRC(text){
   const out=[]; const re=/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  let offset=0;                     // [offset:±毫秒]，正值表示歌词整体提前显示
   for(const raw of String(text||"").split(/\r?\n/)){
     const trimmed = raw.trim();
+    const om = /^\[offset\s*:\s*([+-]?\d+)\s*\]$/i.exec(trimmed);
+    if(om){ offset = +om[1] / 1000; continue; }
     if(!trimmed || /^\[(ti|ar|al|by|offset|re|ve|au|length)\s*:/i.test(trimmed)) continue;
     if(trimmed.startsWith("{") && trimmed.endsWith("}")){
       try{
@@ -1732,6 +1735,7 @@ function parseLRC(text){
     if(!txt || /^暂无歌词$/.test(txt)) continue;
     for(const t of times) out.push({t, txt});
   }
+  if(offset) for(const l of out) l.t = Math.max(0, l.t - offset);
   out.sort((a,b)=>a.t-b.t);
   if(out.length===1 && /^(?:暂无歌词|纯音乐[\s，,、·]*请欣赏)$/.test(out[0].txt)) return [];
   return out;
